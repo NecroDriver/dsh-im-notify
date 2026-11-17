@@ -274,7 +274,7 @@ function ConfiguredView({ call, status, setStatus, onCredentialsFlow }) {
           type: 'button', className: 'din-btn',
           onClick: () => onCredentialsFlow?.('replace'),
         }, '更换新应用'),
-        h('span', { className: 'din-muted' }, '更换凭据无需命令行')));
+        h('span', { className: 'din-muted' }, '更换凭据无需命令行'))));
 }
 
 // ---------- panel root ----------

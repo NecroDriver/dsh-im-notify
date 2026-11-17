@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.12';
+export const PLUGIN_VERSION = '0.2.13';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -40,7 +40,13 @@ const HELP = [
   '推送来之后：引用那条推送消息直接回复，内容会直达对应会话。',
 ].join('\n');
 
-export async function apply(ctx, config = {}) {
+// Synchronous on purpose (production-proven by dshmarket lib/index.js:241):
+// a Host plugin fiber whose apply() stays suspended for ~20s gets reclaimed
+// ~25s after load (observed 2026-11-17 on v0.2.12 — two cold starts and one
+// hot reload, all disposed at 25.0–25.2s, routes torn down → panel 404).
+// apply() must return immediately; ALL async work (state load, first dial,
+// retries) rides fire-and-forget chains off the effect factory instead.
+export function apply(ctx, config = {}) {
   let debugFile = null;
   const log = (message, level = 'info') => {
     const target = ctx?.logger ?? console;
@@ -58,7 +64,6 @@ export async function apply(ctx, config = {}) {
   try { debugFile = join(dir, 'debug.log'); } catch { debugFile = null; }
   log(`[dsh-im-notify] host module loaded (version ${PLUGIN_VERSION})`);
   const state = new StateStore(dir, log);
-  await state.load(config);
 
   let gateway = null;
   let engine = null;
@@ -151,10 +156,6 @@ export async function apply(ctx, config = {}) {
   gateway = createGateway(ctx, log);
   const abort = new AbortController();
   const { signal } = abort;
-
-  if (!state.configured) {
-    log(`[dsh-im-notify] no credentials found at ${dir}/config.json — idle, settings panel offers QR onboarding`, 'warn');
-  }
 
   // completion push → card + mapping. Rebuilt on every (re)connect so fresh
   // credentials from re-authorization take effect without a Host restart.
@@ -366,12 +367,11 @@ export async function apply(ctx, config = {}) {
   // throw → apply rejected → settings RPC unregistered → panel 404). Degrade
   // instead: keep engine + settings alive, retry with backoff, panel shows state.
   //
-  // Fiber caveat (proven 2026-11-17): fire-and-forget async work that is still
-  // pending when apply() resolves loses its macro-task timers — the 20s
-  // handshake timeout never fired and the dial hung in `connecting` forever.
-  // So the FIRST dial is awaited on the apply chain (fiber alive), and retries
-  // are scheduled through the host `timer` service whose callbacks run in the
-  // host context, not on this plugin's fiber.
+  // Lifecycle (proven 2026-11-17, see the sync-apply note above): apply() must
+  // return immediately, so the state load AND the first dial both run on a
+  // fire-and-forget chain — same shape as dshmarket's repairTimer chain, which
+  // survives on this Host in production. Retries go through the host `timer`
+  // service first (callbacks run in the host context).
   const hostTimer = (() => { try { return ctx.get?.('timer'); } catch { return undefined; } })();
   const scheduleRetry = (delay) => {
     if (retryTimer) { clearRetry(); }
@@ -415,10 +415,20 @@ export async function apply(ctx, config = {}) {
       scheduleRetry(Math.min(60_000, 5_000 * 2 ** (connection.attempts - 1)));
     }
   };
-  // First dial on the apply chain (bounded by the 20s handshake timeout inside
-  // FeishuRuntime.start); after it settles — online or failed — apply resolves
-  // and any retry loop continues off-fiber via the host timer service.
-  await attemptStart();
+  // Bootstrap off the apply chain: load persisted state, then first dial.
+  // Fire-and-forget on purpose — apply() must stay synchronous (see header).
+  void (async () => {
+    try {
+      await state.load(config);
+      if (!state.configured) {
+        log(`[dsh-im-notify] no credentials found at ${dir}/config.json — idle, settings panel offers QR onboarding`, 'warn');
+        return;
+      }
+      await attemptStart();
+    } catch (error) {
+      log(`[dsh-im-notify] bootstrap failed: ${error?.message ?? error}`, 'error');
+    }
+  })();
 
   const dispose = () => {
     if (retryTimer) clearRetry();
