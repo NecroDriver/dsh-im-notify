@@ -1,0 +1,53 @@
+{
+  "name": "dsh-im-notify",
+  "version": "0.1.0",
+  "description": "Feishu-only task-completion notifier for DeepSeek Harness: watch any session, get a push when its turn ends, quote-reply the push to route your message straight back into that session.",
+  "author": "dsh-im-notify contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NecroDriver/dsh-im-notify.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NecroDriver/dsh-im-notify/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "files": [
+    "lib",
+    "plugin-src",
+    "scripts",
+    "cordis.patch.yml",
+    "dsh.bundle.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node plugin-src/host/build.mjs",
+    "setup": "node scripts/setup.mjs",
+    "dev:link": "node scripts/dev-link.mjs"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.45.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.9",
+    "qrcode": "^1.5.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": "0.2.1"
+    }
+  }
+}

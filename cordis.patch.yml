@@ -1,0 +1,17 @@
+# dsh-im-notify — minimal host-only plugin entry.
+#
+# The loader resolves this package by name from the profile's node_modules
+# (dsh.profile.bundles in the profile package.json) and calls the module's
+# apply(ctx, config). Keys under `config:` below are merged into that config
+# (dsh-mcp-connector precedent). Credentials normally live OUTSIDE the package
+# in <dshHome>/integrations/dsh-im-notify/config.json so reinstalls/upgrades
+# never touch them — see README.md.
+- insert:
+    - id: dsh-im-notify
+      name: 'dsh-im-notify'
+      # config:
+      #   appId: 'cli_xxxxxxxx'
+      #   appSecret: 'xxxxxxxx'
+      #   ownerOpenIds: ['ou_xxxxxxxx']
+      #   domain: 'feishu'          # or 'lark'
+      #   maxWatchesPerChat: 8

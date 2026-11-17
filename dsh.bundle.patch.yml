@@ -1,0 +1,6 @@
+# dsh.bundle.patch.yml — kept in sync with cordis.patch.yml for loaders that
+# read this filename directly (billion-context precedent). See package.json
+# dsh.bundle.patch for the canonical pointer.
+- insert:
+    - id: dsh-im-notify
+      name: 'dsh-im-notify'
