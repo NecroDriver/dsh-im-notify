@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.17';
+export const PLUGIN_VERSION = '0.2.18';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -162,7 +162,14 @@ export function apply(ctx, config = {}) {
   const createFeishu = () => new FeishuRuntime({
     config: state.config,
     log,
-    onEvent: (inbound) => void handleInbound(inbound),
+    // Inbound handling must NEVER leak a rejection to the Host process —
+    // an unhandled rejection from the SDK event dispatcher is treated as a
+    // FATAL load failure by dsh-desktop (host exits, crash dialog).
+    onEvent: (inbound) => {
+      Promise.resolve(handleInbound(inbound)).catch((error) => {
+        log(`[dsh-im-notify] inbound handling error: ${error?.message ?? error}`, 'error');
+      });
+    },
     onReady: () => {
       void engine.compensate(signal).catch(() => undefined);
     },

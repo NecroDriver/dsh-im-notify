@@ -203,7 +203,11 @@ export class FeishuRuntime {
 
   async #reply(messageId, data) {
     if (!this.#client) throw new Error('Feishu client not started');
-    const response = await this.#client.im.message.reply({ params: { message_id: messageId }, data });
+    // URL path params live in payload.path (SDK formatPayload:100760-100764);
+    // passing them via params makes fillApiPath throw "request miss message_id
+    // path argument" — which escaped as an unhandled rejection and KILLED the
+    // whole DSH Host on the first /help reply (crash 2026-11-17T14-05-57).
+    const response = await this.#client.im.message.reply({ path: { message_id: messageId }, data });
     const sentId = response?.data?.message_id ?? null;
     this.#status.cardsSent += 1;
     return sentId;
