@@ -89,8 +89,10 @@ export function createRegistrationManager({
     };
   }
 
-  async function begin() {
-    log(`[registration] begin called (previous attempt superseded)`);
+  // options.appId → repair/re-authorize an existing app (SDK clientID flow);
+  // omitted → createOnly brand-new app.
+  async function begin(options = {}) {
+    log(`[registration] begin called${options?.appId ? ` (repair appId=${options.appId})` : ' (create new)'}`);
     // supersede any previous attempt
     cancel(String(attempt));
     attempt += 1;
@@ -131,7 +133,9 @@ export function createRegistrationManager({
         const result = await callRegisterApp({
           ...(config.domain === 'lark' ? { domain: 'accounts.larksuite.com' } : {}),
           source: 'dsh-im-notify',
-          createOnly: true,
+          // repair mode passes the existing appId (SDK sends it as clientID);
+          // create mode asks the landing page to create a fresh app.
+          ...(options?.appId ? { appId: String(options.appId) } : { createOnly: true }),
           appPreset: APP_PRESET,
           addons: ADDONS,
           signal: controller.signal,

@@ -11,14 +11,14 @@ export class RouteBack {
   #state;
   #gateway;
   #engine;
-  #feishu;
+  #getFeishu;
   #log;
 
-  constructor({ state, gateway, engine, feishu, log }) {
+  constructor({ state, gateway, engine, getFeishu, log }) {
     this.#state = state;
     this.#gateway = gateway;
     this.#engine = engine;
-    this.#feishu = feishu;
+    this.#getFeishu = getFeishu;
     this.#log = log;
   }
 
@@ -31,7 +31,7 @@ export class RouteBack {
 
     const text = inbound.text.trim();
     if (!text) {
-      await this.#feishu.replyText(inbound.messageId,
+      await this.#getFeishu().replyText(inbound.messageId,
         '引用了任务通知，但没有文字内容。请引用通知消息并直接输入要发给该会话的指令。');
       return true;
     }
@@ -41,13 +41,13 @@ export class RouteBack {
       await this.#gateway.prompt(mapping.sessionId, text, { mode });
     } catch (error) {
       this.#log(`[dsh-im-notify] route-back prompt failed: ${error?.message ?? error}`, 'warn');
-      await this.#feishu.replyText(inbound.messageId,
+      await this.#getFeishu().replyText(inbound.messageId,
         `❌ 送达失败（${error?.message ?? error}）。会话可能已被清理，请用 /watchlist 检查。`);
       return true;
     }
 
     const label = mapping.title ?? mapping.sessionId.slice(0, 8);
-    await this.#feishu.replyText(
+    await this.#getFeishu().replyText(
       inbound.messageId,
       mode === 'steer'
         ? `✅ 已作为补充指令注入运行中的会话「${label}」`

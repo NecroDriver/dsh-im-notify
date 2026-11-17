@@ -26,7 +26,8 @@ export const name = 'dsh-im-notify';
 export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
-const PLUGIN_VERSION = '0.2.7-debug';
+// (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
+export const PLUGIN_VERSION = '0.2.10';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -72,9 +73,19 @@ export async function apply(ctx, config = {}) {
         : (openId ? [openId] : []);
       state.config = { ...state.config, appId, appSecret, domain, ownerOpenIds: owners };
       await state.save();
+      // Reconnect immediately with the fresh credentials (no Host restart needed).
+      if (typeof attemptStart === 'function') {
+        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        void attemptStart();
+      }
     },
     log,
   });
+
+  // Feishu connection state shared with the settings panel (idle: offline).
+  const connection = { state: 'offline', error: null, attempts: 0 };
+  let retryTimer = null;
+  let attemptStart = null; // assigned in the configured branch below
 
   async function settingsStatus() {
     return {
@@ -85,6 +96,8 @@ export async function apply(ctx, config = {}) {
       mappingCount: Object.keys(state.mappings).length,
       botReady: feishu?.status?.ready === true,
       botStartedAt: feishu?.status?.startedAt ?? null,
+      connection: { ...connection },
+      appId: state.configured ? state.config.appId : null,
       registration: registration.snapshot(),
       watches: state.watches.map((watch) => ({
         sessionId: watch.sessionId,
@@ -113,6 +126,13 @@ export async function apply(ctx, config = {}) {
       case 'registration.cancel':
         registration.cancel(payload?.attemptId);
         return { ok: true, value: { cancelled: true } };
+      case 'connection.retry':
+        if (typeof attemptStart !== 'function') {
+          return { ok: false, error: { code: 'bad-request', message: '尚未配置，没有可重试的连接。' } };
+        }
+        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        void attemptStart();
+        return { ok: true, value: await settingsStatus() };
       case 'watch.remove':
         state.removeWatch(String(payload?.chatId ?? ''), String(payload?.sessionId ?? ''));
         return { ok: true, value: await settingsStatus() };
@@ -124,20 +144,21 @@ export async function apply(ctx, config = {}) {
     }
   }, { log });
 
-  if (!state.configured) {
-    log(`[dsh-im-notify] no credentials found at ${dir}/config.json — idle, settings panel offers QR onboarding`, 'warn');
-    return () => {
-      registration.cancel();
-      stopSettingsRpc();
-    };
-  }
-
+  // Unified pipeline: even unconfigured we boot everything; attemptStart is a
+  // no-op without credentials. That way the very first successful QR scan
+  // (saveCredentials → attemptStart) brings the long connection up live,
+  // with no Host restart.
   gateway = createGateway(ctx, log);
   const abort = new AbortController();
   const { signal } = abort;
 
-  // completion push → card + mapping
-  feishu = new FeishuRuntime({
+  if (!state.configured) {
+    log(`[dsh-im-notify] no credentials found at ${dir}/config.json — idle, settings panel offers QR onboarding`, 'warn');
+  }
+
+  // completion push → card + mapping. Rebuilt on every (re)connect so fresh
+  // credentials from re-authorization take effect without a Host restart.
+  const createFeishu = () => new FeishuRuntime({
     config: state.config,
     log,
     onEvent: (inbound) => void handleInbound(inbound),
@@ -145,6 +166,7 @@ export async function apply(ctx, config = {}) {
       void engine.compensate(signal).catch(() => undefined);
     },
   });
+  feishu = createFeishu();
 
   engine = new WatchEngine({
     state,
@@ -157,7 +179,7 @@ export async function apply(ctx, config = {}) {
     log,
   });
 
-  const routeBack = new RouteBack({ state, gateway, engine, feishu, log });
+  const routeBack = new RouteBack({ state, gateway, engine, getFeishu: () => feishu, log });
 
   // ---- session listing (verified surface only: workspace.follow + session.follow) ----
   const lastListings = new Map(); // chatId → { at, items: [{sessionId,title,workspace}] }
@@ -340,16 +362,35 @@ export async function apply(ctx, config = {}) {
 
   // ---- start ----
   engine.start(ctx);
-  try {
-    await feishu.start(signal);
-    log('[dsh-im-notify] started — feishu long connection ready');
-  } catch (error) {
-    engine.stop();
-    log(`[dsh-im-notify] feishu start failed: ${error?.message ?? error}`, 'error');
-    throw error;
-  }
+  // Feishu WS handshake failing must NEVER blow up the whole plugin (it used to
+  // throw → apply rejected → settings RPC unregistered → panel 404). Degrade
+  // instead: keep engine + settings alive, retry with backoff, panel shows state.
+  attemptStart = async () => {
+    if (signal.aborted) return;
+    if (!state.configured) { connection.state = 'offline'; return; } // nothing to dial yet
+    connection.state = connection.attempts === 0 ? 'connecting' : 'retrying';
+    try {
+      feishu.stop();
+      feishu = createFeishu(); // pick up fresh credentials after re-authorization
+      await feishu.start(signal);
+      connection.state = 'online';
+      connection.error = null;
+      connection.attempts = 0;
+      log('[dsh-im-notify] started — feishu long connection ready');
+    } catch (error) {
+      if (signal.aborted) return;
+      connection.attempts += 1;
+      connection.state = 'failed';
+      connection.error = error?.message ?? String(error);
+      log(`[dsh-im-notify] feishu start failed (attempt ${connection.attempts}): ${connection.error}`, 'error');
+      const delay = Math.min(60_000, 5_000 * 2 ** (connection.attempts - 1));
+      retryTimer = setTimeout(() => { retryTimer = null; void attemptStart(); }, delay);
+    }
+  };
+  void attemptStart();
 
   const dispose = () => {
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     abort.abort(new DOMException('dsh-im-notify disposed', 'AbortError'));
     registration.cancel();
     stopSettingsRpc();

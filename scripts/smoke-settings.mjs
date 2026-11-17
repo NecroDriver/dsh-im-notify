@@ -19,9 +19,10 @@ const check = (name, ok, detail = '') => {
 const home = await mkdtemp(join(tmpdir(), 'dsh-notify-smoke-'));
 
 let fetchDef = null;
+const effects = [];
 const ctx = {
   log: { info: () => {}, warn: () => {}, error: () => {} },
-  effect: (fn) => { fn(); return () => {}; },
+  effect: (fn) => { effects.push(fn); return () => { const i = effects.indexOf(fn); if (i >= 0) effects.splice(i, 1); }; },
   on: () => () => {},
   connection: {
     fetch: {
@@ -143,10 +144,33 @@ manager.cancel(begun.attemptId);
 const stale = await manager.poll(begun.attemptId);
 check('poll after cancel: stale-attempt', stale.ok === false && stale.error?.code === 'stale-attempt');
 
+// --- repair-mode contract: begin({appId}) → SDK gets appId, no createOnly ---
+const registerAppCalls = [];
+const repairManager = createRegistrationManager({
+  getConfig: () => ({ appId: 'cli_existing' }),
+  saveCredentials: async () => {},
+  registerApp: async (options) => {
+    registerAppCalls.push(options);
+    options.onQRCodeReady({ url: 'https://accounts.feishu.cn/oauth/v1/device/authorize?user_code=REPAIR', expireIn: 600 });
+    return { client_id: 'cli_existing', client_secret: 'SECRET2', user_info: { open_id: 'ou_repair' } };
+  },
+});
+const repairBegun = await repairManager.begin({ appId: 'cli_existing' });
+check('begin({appId}) repair mode: SDK receives appId, createOnly absent',
+  registerAppCalls[0]?.appId === 'cli_existing' && registerAppCalls[0]?.createOnly === undefined,
+  `appId=${registerAppCalls[0]?.appId} createOnly=${registerAppCalls[0]?.createOnly}`);
+check('begin({appId}) still returns qr_ready + attemptId',
+  repairBegun.state === 'qr_ready' && typeof repairBegun.attemptId === 'string');
+repairManager.cancel(repairBegun.attemptId);
+
 // --- StateStore regression: save() must persist credentials to config.json ---
 // Incident 2026-11-17: QR scan succeeded, log said "credentials saved", but
 // config.json never hit disk (save() only wrote state.json) → lost on restart.
 const { StateStore } = await import('../plugin-src/host/state.mjs');
+const { PLUGIN_VERSION } = await import('../plugin-src/host/index.mjs');
+const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+check('PLUGIN_VERSION matches package.json version', PLUGIN_VERSION === pkg.version,
+  `PLUGIN_VERSION=${PLUGIN_VERSION} pkg=${pkg.version}`);
 const storeHome = await mkdtemp(join(tmpdir(), 'dsh-notify-state-'));
 const store = new StateStore(storeHome, () => {});
 await store.load({});
