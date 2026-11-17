@@ -93,9 +93,10 @@ res = await rpc('registration.cancel', { attemptId: '999' });
 message = await res.json();
 check('registration.cancel unknown attempt → ok', message.result?.ok === true);
 
-// dispose path must not throw even from idle (via the ctx.effect disposer)
+// dispose path must not throw even from idle (ctx.effect factories return the
+// real disposer — run each factory, then invoke what it returned)
 let disposed = true;
-try { for (const fn of [...effects]) fn(); } catch { disposed = false; }
+try { for (const fn of [...effects]) { const d = fn(); if (typeof d === 'function') d(); } } catch { disposed = false; }
 check('dispose(idle) clean', disposed);
 
 // --- registration state machine (mocked SDK, no network) ---

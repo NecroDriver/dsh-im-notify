@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.14';
+export const PLUGIN_VERSION = '0.2.15';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -439,11 +439,12 @@ export function apply(ctx, config = {}) {
     engine.stop();
     feishu.stop();
   };
-  // Exactly ONE cleanup channel: ctx.effect (the cordis-owned disposer). Do NOT
-  // also `return dispose` — returning a function from apply() got it invoked
-  // early on this Host (v0.2.13: signal aborted 1.7s after a hot reload while
-  // the fiber itself stayed active), tearing the settings route down → 404.
+  // ctx.effect takes a FACTORY: running it mounts, its RETURN value cleans up
+  // (dshmarket lib/index.js:315 production pattern). Passing `dispose` directly
+  // made cordis "mount" it on registration — dispose ran 3ms into apply,
+  // aborting the signal and tearing the settings route down (v0.2.13/0.2.14
+  // forensics). So: no mount work here, just hand back the real disposer.
   if (typeof ctx?.effect === 'function') {
-    ctx.effect(dispose, 'dsh-im-notify: runtime');
+    ctx.effect(() => dispose, 'dsh-im-notify: runtime');
   }
 }
