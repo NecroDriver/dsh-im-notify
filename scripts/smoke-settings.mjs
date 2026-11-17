@@ -33,7 +33,7 @@ const ctx = {
 };
 
 const dispose = await apply(ctx, { dshHome: home });
-check('apply(idle) returns dispose', typeof dispose === 'function');
+check('apply(idle) registers effect disposer (no return value)', dispose === undefined && effects.length === 1);
 check('fetch handler registered', fetchDef?.path === '/api/dsh-im-notify' && fetchDef.methods.includes('POST'));
 
 const RPC_KEY = 'dsh-im-notify';
@@ -93,9 +93,9 @@ res = await rpc('registration.cancel', { attemptId: '999' });
 message = await res.json();
 check('registration.cancel unknown attempt → ok', message.result?.ok === true);
 
-// dispose path must not throw even from idle
+// dispose path must not throw even from idle (via the ctx.effect disposer)
 let disposed = true;
-try { dispose(); } catch { disposed = false; }
+try { for (const fn of [...effects]) fn(); } catch { disposed = false; }
 check('dispose(idle) clean', disposed);
 
 // --- registration state machine (mocked SDK, no network) ---
