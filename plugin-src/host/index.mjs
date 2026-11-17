@@ -37,7 +37,7 @@ const HELP = [
 
 export async function apply(ctx, config = {}) {
   const log = (message, level = 'info') => {
-    const target = ctx?.log ?? console;
+    const target = ctx?.logger ?? console;
     try {
       (target[level] ?? target.log).call(target, message);
     } catch {
