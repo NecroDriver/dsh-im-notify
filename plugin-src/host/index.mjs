@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.10';
+export const PLUGIN_VERSION = '0.2.11';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -366,9 +366,11 @@ export async function apply(ctx, config = {}) {
   // throw → apply rejected → settings RPC unregistered → panel 404). Degrade
   // instead: keep engine + settings alive, retry with backoff, panel shows state.
   attemptStart = async () => {
-    if (signal.aborted) return;
+    if (signal.aborted) { log('[dsh-im-notify] attemptStart skipped: aborted'); return; }
+    log(`[dsh-im-notify] attemptStart: configured=${state.configured} appId=${state.config.appId ? 'present' : 'missing'}`);
     if (!state.configured) { connection.state = 'offline'; return; } // nothing to dial yet
     connection.state = connection.attempts === 0 ? 'connecting' : 'retrying';
+    log(`[dsh-im-notify] dialing feishu (${connection.state}, attempt ${connection.attempts + 1})…`);
     try {
       feishu.stop();
       feishu = createFeishu(); // pick up fresh credentials after re-authorization
