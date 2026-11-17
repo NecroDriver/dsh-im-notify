@@ -71,8 +71,12 @@ function SetupView({ call, onConfigured }) {
     setBusy(true);
     try {
       const result = await call('registration.begin', {});
-      if (result?.ok) setFlow({ phase: 'qr', ...result, remainingSeconds: result.remainingSeconds ?? 600 });
-      else setFlow({ phase: 'error', message: result?.error?.message ?? '无法发起扫码接入。' });
+      if (result?.ok) {
+        const value = result.value ?? {};
+        setFlow({ phase: 'qr', ...value, remainingSeconds: value.remainingSeconds ?? 600 });
+      } else {
+        setFlow({ phase: 'error', message: result?.error?.message ?? '无法发起扫码接入。' });
+      }
     } catch (error) {
       setFlow({ phase: 'error', message: error?.message ?? String(error) });
     } finally {
@@ -95,23 +99,24 @@ function SetupView({ call, onConfigured }) {
           setFlow({ phase: 'error', message: result?.error?.message ?? '扫码会话已失效。' });
           return;
         }
-        if (result.state === 'succeeded') {
-          setFlow({ phase: 'succeeded', appIdMasked: result.appIdMasked });
+        const value = result.value ?? {};
+        if (value.state === 'succeeded') {
+          setFlow({ phase: 'succeeded', appIdMasked: value.appIdMasked });
           onConfigured?.();
           return;
         }
-        if (result.state === 'expired' || result.state === 'cancelled') {
-          setFlow({ phase: 'error', message: result.state === 'expired' ? '二维码已过期，可重新发起。' : '扫码已取消。' });
+        if (value.state === 'expired' || value.state === 'cancelled') {
+          setFlow({ phase: 'error', message: value.state === 'expired' ? '二维码已过期，可重新发起。' : '扫码已取消。' });
           return;
         }
-        if (result.state === 'error') {
-          setFlow({ phase: 'error', message: result.error?.message ?? '注册过程出错。' });
+        if (value.state === 'error') {
+          setFlow({ phase: 'error', message: value.error?.message ?? '注册过程出错。' });
           return;
         }
         setFlow((current) => (current?.phase === 'qr' && current.attemptId === attemptId
-          ? { ...current, qrCodeDataUrl: result.qrCodeDataUrl ?? current.qrCodeDataUrl,
-              verificationUrl: result.verificationUrl ?? current.verificationUrl,
-              remainingSeconds: result.remainingSeconds ?? current.remainingSeconds }
+          ? { ...current, qrCodeDataUrl: value.qrCodeDataUrl ?? current.qrCodeDataUrl,
+              verificationUrl: value.verificationUrl ?? current.verificationUrl,
+              remainingSeconds: value.remainingSeconds ?? current.remainingSeconds }
           : current));
       } catch {
         failures += 1;

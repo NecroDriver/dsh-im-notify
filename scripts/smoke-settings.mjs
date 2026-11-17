@@ -122,6 +122,10 @@ check('begin: qr_ready with data URL',
   begun.state === 'qr_ready' && begun.qrCodeUrl?.includes('user_code=SMOKE')
   && begun.qrCodeDataUrl?.startsWith('data:image/png;base64,'),
   `state=${begun.state}`);
+// Contract the settings client relies on: begin's value (→ RPC envelope value) carries
+// a non-empty attemptId. Regression for the "poll STALE attemptId=undefined" incident.
+check('begin: value carries non-empty attemptId (client contract)',
+  typeof begun.attemptId === 'string' && begun.attemptId.length > 0, `attemptId=${JSON.stringify(begun.attemptId)}`);
 
 let polled = await manager.poll(begun.attemptId);
 check('poll: qr_ready phase', polled.ok === true && polled.state === 'qr_ready');
