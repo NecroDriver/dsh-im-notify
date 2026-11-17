@@ -151,9 +151,18 @@ export class FeishuRuntime {
         signal?.removeEventListener('abort', onAbort);
         fn(value);
       };
+      // Pipe SDK-internal [ws] logs into our debug log to expose exactly which
+      // stage stalls inside the Host process (endpoint fetch vs ws connect).
+      const sdkLogger = {
+        debug: (...a) => this.#log(`sdk.debug ${a.map(String).join(' ')}`),
+        info: (...a) => this.#log(`sdk.info ${a.map(String).join(' ')}`),
+        warn: (...a) => this.#log(`sdk.warn ${a.map(String).join(' ')}`, 'warn'),
+        error: (...a) => this.#log(`sdk.error ${a.map(String).join(' ')}`, 'error'),
+      };
       this.#wsClient = new lark.WSClient({
         ...larkConfig,
-        loggerLevel: lark.LoggerLevel.warn,
+        loggerLevel: lark.LoggerLevel.debug,
+        logger: sdkLogger,
         onReady: () => {
           this.#status.ready = true;
           this.#status.connectedAt = new Date().toISOString();
