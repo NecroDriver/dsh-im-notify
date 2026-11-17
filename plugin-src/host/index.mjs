@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.16';
+export const PLUGIN_VERSION = '0.2.17';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',

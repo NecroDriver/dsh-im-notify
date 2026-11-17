@@ -175,8 +175,11 @@ export class FeishuRuntime {
           if (!this.#status.ready) settle(reject, error);
         },
       });
-      // SDK reconnection is internal: a dropped link is retried by WSClient.
-      Promise.resolve(this.#wsClient.start(dispatcher)).catch((error) => settle(reject, error));
+      // SDK 1.45+ start(params) DESTRUCTURES params.eventDispatcher — passing
+      // the dispatcher positionally makes start() warn "need to start with a
+      // eventDispatcher" and return WITHOUT connecting (the 20s "handshake
+      // timeout" we chased since v0.2.10).
+      Promise.resolve(this.#wsClient.start({ eventDispatcher: dispatcher })).catch((error) => settle(reject, error));
     });
   }
 
