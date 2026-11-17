@@ -1,4 +1,5 @@
 node_modules/
-lib/
 *.log
 .DS_Store
+# NOTE: lib/ (the built bundle) is intentionally COMMITTED — git installs
+# (`pnpm add <repo-url>`) do not run a build step, so the dist must ship in-repo.
