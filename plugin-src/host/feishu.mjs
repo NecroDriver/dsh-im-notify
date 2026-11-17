@@ -62,7 +62,11 @@ export function buildCompletionCard({ title, sessionId, kind, startedAt, note })
 
 export function normalizeInbound(event) {
   const message = event?.message ?? {};
-  const senderOpenId = event?.sender?.open_id ?? event?.sender?.open_id?.id ?? null;
+  // v2 event schema nests the id: sender.sender_id.open_id (union_id/user_id
+  // siblings). Reading sender.open_id directly yields null → every command
+  // was rejected as "non-owner".
+  const senderId = event?.sender?.sender_id ?? event?.sender ?? {};
+  const senderOpenId = senderId.open_id ?? senderId.union_id ?? null;
   let text = '';
   if (message.message_type === 'text' && typeof message.content === 'string') {
     try {
