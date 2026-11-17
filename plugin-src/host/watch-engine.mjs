@@ -64,15 +64,23 @@ export class WatchEngine {
     const sessionId = session?.id;
     if (typeof sessionId !== 'string' || !event || typeof event !== 'object') return;
     const watches = this.#state.watchesFor(sessionId);
-    if (watches.length === 0) return;
+    // Explicit watches always win; only sessions with none fall through to the
+    // catch-all (/watchall) target.
+    const catchAll = watches.length === 0 ? this.#state.watchAll : null;
+    if (watches.length === 0 && !catchAll) return;
+    const targets = watches.length > 0
+      ? watches.map((watch) => ({ chatId: watch.chatId, replyToMessageId: watch.replyToMessageId, title: watch.title ?? null }))
+      : [{ chatId: catchAll.chatId, replyToMessageId: catchAll.replyToMessageId, title: null }];
 
-    const seq = Number.isSafeInteger(event.seq) ? event.seq : null;
-    if (seq !== null) {
-      const maxKnown = Math.max(...watches.map((watch) => Number.isSafeInteger(watch.lastSeq) ? watch.lastSeq : -1));
-      if (seq <= maxKnown) return; // duplicate / already compensated
-      if (seq > maxKnown + 1 && maxKnown >= 0) {
-        // Gap: we missed events (host restart while plugin down). Pushing from
-        // here is still correct for turn/end; compensation covers the rest.
+    if (watches.length > 0) {
+      const seq = Number.isSafeInteger(event.seq) ? event.seq : null;
+      if (seq !== null) {
+        const maxKnown = Math.max(...watches.map((watch) => Number.isSafeInteger(watch.lastSeq) ? watch.lastSeq : -1));
+        if (seq <= maxKnown) return; // duplicate / already compensated
+        if (seq > maxKnown + 1 && maxKnown >= 0) {
+          // Gap: we missed events (host restart while plugin down). Pushing from
+          // here is still correct for turn/end; compensation covers the rest.
+        }
       }
     }
 
@@ -88,13 +96,13 @@ export class WatchEngine {
     this.#runningStarts.delete(sessionId);
     this.#running.delete(sessionId);
     const kind = event.data?.reason?.kind ?? 'completed';
-    for (const watch of watches) {
+    for (const target of targets) {
       void Promise.resolve()
         .then(() => this.#deliver({
           sessionId,
-          title: watch.title ?? null,
-          chatId: watch.chatId,
-          replyToMessageId: watch.replyToMessageId,
+          title: target.title,
+          chatId: target.chatId,
+          replyToMessageId: target.replyToMessageId,
           kind,
           startedAt,
         }))

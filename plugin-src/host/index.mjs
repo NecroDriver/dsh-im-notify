@@ -27,11 +27,12 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.21';
+export const PLUGIN_VERSION = '0.2.22';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
   '/watch <会话ID或序号> — 关注会话，完成后推送',
+  '/watchall — 所有未关注会话完成后都推送到本聊天（/watchall off 关闭）',
   '/watchlist — 查看本聊天关注的会话',
   '/unwatch <会话ID或序号> — 取消关注',
   '/sessions — 列出最近会话（配合 /watch 序号）',
@@ -98,6 +99,7 @@ export function apply(ctx, config = {}) {
       appIdMasked: state.configured ? maskAppId(state.config.appId) : null,
       domain: state.config.domain ?? 'feishu',
       watchCount: state.watches.length,
+      watchAll: state.watchAll ? { enabled: true, chatId: state.watchAll.chatId, startedAt: state.watchAll.startedAt } : { enabled: false },
       mappingCount: Object.keys(state.mappings).length,
       botReady: feishu?.status?.ready === true,
       botStartedAt: feishu?.status?.startedAt ?? null,
@@ -180,9 +182,19 @@ export function apply(ctx, config = {}) {
     state,
     gateway,
     deliver: async ({ sessionId, title, chatId, replyToMessageId, kind, startedAt, note }) => {
-      const card = buildCompletionCard({ title, sessionId, kind, startedAt, note });
+      // watchAll pushes carry no stored title — resolve one lazily per push.
+      let cardTitle = title;
+      if (!cardTitle) {
+        try {
+          const snap = await gateway.sessionSnapshot(sessionId, 6, signal);
+          cardTitle = (typeof snap.header?.title === 'string' && snap.header.title)
+            || pickSessionLabel(snap.records)
+            || null;
+        } catch { /* keep null — card falls back to 未命名会话 */ }
+      }
+      const card = buildCompletionCard({ title: cardTitle, sessionId, kind, startedAt, note });
       const messageId = await feishu.sendCompletionCard({ chatId, replyToMessageId, card });
-      if (messageId) state.addMapping(messageId, sessionId, title);
+      if (messageId) state.addMapping(messageId, sessionId, cardTitle);
     },
     log,
   });
@@ -344,6 +356,27 @@ export function apply(ctx, config = {}) {
           return;
         }
 
+        case '/watchall': {
+          if (arg.trim().toLowerCase() === 'off') {
+            if (!state.watchAll) {
+              await feishu.replyText(inbound.messageId, '全量推送本来就没开启。');
+              return;
+            }
+            state.setWatchAll(null);
+            await feishu.replyText(inbound.messageId, '已关闭全量推送。之后只有 /watch 关注的会话会推送。');
+            return;
+          }
+          state.setWatchAll({
+            chatId: inbound.chatId,
+            replyToMessageId: inbound.messageId,
+            startedAt: new Date().toISOString(),
+          });
+          await feishu.replyText(inbound.messageId,
+            '🔔 已开启全量推送：所有未被 /watch 关注的会话完成后都会推送到本聊天。'
+            + '一旦 /watch 关注了某个会话，它只推给关注目标。/watchall off 关闭。');
+          return;
+        }
+
         case '/unwatch': {
           const watches = state.watchesIn(inbound.chatId);
           if (!arg) {
@@ -369,13 +402,14 @@ export function apply(ctx, config = {}) {
 
         case '/watchlist': {
           const watches = state.watchesIn(inbound.chatId);
-          if (watches.length === 0) {
-            await feishu.replyText(inbound.messageId, '本聊天还没有关注任何会话。/sessions 查看，/watch 关注。');
-            return;
-          }
+          const all = state.watchAll && state.watchAll.chatId === inbound.chatId ? state.watchAll : null;
           const lines = watches.map((watch, index) =>
             `${index + 1}. ${watch.title ?? watch.sessionId.slice(0, 8)} · ${watch.sessionId.slice(0, 8)}…${engine.isRunning(watch.sessionId) ? ' · 🏃 运行中' : ''}`);
-          await feishu.replyText(inbound.messageId, ['关注的会话：', ...lines].join('\n'));
+          const head = [
+            `全量推送：${all ? `✅ 已开启（未关注的会话完成后也推送到本聊天）${state.watches.length > 0 ? '，另有 ' + state.watches.length + ' 个显式关注' : ''}` : '未开启'}`,
+            ...(watches.length > 0 ? ['关注的会话：'] : ['本聊天没有显式关注的会话。']),
+          ];
+          await feishu.replyText(inbound.messageId, [...head, ...lines].join('\n'));
           return;
         }
 
@@ -385,7 +419,7 @@ export function apply(ctx, config = {}) {
             'dsh-im-notify 状态',
             `连接：${status.ready ? '✅ 飞书长连接正常' : `⚠️ ${status.lastError ?? '未连接'}`}`,
             `启动：${status.startedAt ?? '-'} · 收消息 ${status.messagesReceived} · 发卡片 ${status.cardsSent}`,
-            `关注：${state.watches.length} 个 · 回程映射：${Object.keys(state.mappings).length} 条`,
+            `关注：${state.watches.length} 个 · 全量推送：${state.watchAll ? '✅ 开' : '关'} · 回程映射：${Object.keys(state.mappings).length} 条`,
           ].join('\n'));
           return;
         }

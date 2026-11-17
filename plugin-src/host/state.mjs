@@ -54,6 +54,8 @@ export class StateStore {
     this.watches = [];
     /** @type {Record<string,{sessionId:string,title:string|null,at:number}>} messageId → session */
     this.mappings = {};
+    /** @type {{chatId:string,replyToMessageId:string|null,startedAt:string}|null} catch-all target */
+    this.watchAll = null;
   }
 
   async load(cordisConfig = {}) {
@@ -74,6 +76,8 @@ export class StateStore {
     const state = (await readJson(this.#stateFile)) ?? {};
     this.watches = Array.isArray(state.watches) ? state.watches : [];
     this.mappings = state.mappings && typeof state.mappings === 'object' ? state.mappings : {};
+    this.watchAll = state.watchAll && typeof state.watchAll === 'object' && typeof state.watchAll.chatId === 'string'
+      ? state.watchAll : null;
     this.#persisted = JSON.stringify(this.#snapshot());
     this.#gcMappings();
     return this;
@@ -88,6 +92,15 @@ export class StateStore {
     const owners = this.config.ownerOpenIds;
     if (!Array.isArray(owners) || owners.length === 0) return true; // open access
     return owners.includes(senderOpenId);
+  }
+
+  /**
+   * Catch-all watch: when set, sessions with NO explicit watch push here.
+   * Explicit watches always win over the catch-all.
+   */
+  setWatchAll(entry) {
+    this.watchAll = entry; // {chatId, replyToMessageId, startedAt} | null
+    this.save();
   }
 
   watchesFor(sessionId) {
@@ -161,6 +174,7 @@ export class StateStore {
       version: 1,
       watches: this.watches,
       mappings: this.mappings,
+      watchAll: this.watchAll,
       savedAt: new Date().toISOString(),
     };
   }
