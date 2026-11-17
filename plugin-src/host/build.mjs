@@ -18,14 +18,11 @@ await build({
   target: 'node22',
   format: 'esm',
   outfile: join(root, 'lib', 'index.js'),
-  external: ['@deepseek-ai/cordis'],
-  // The lark SDK is CommonJS; inlined into an ESM bundle esbuild would emit a
-  // throwing __require shim ("Dynamic require of util is not supported") that
-  // fires at load time (the SDK requires node builtins at top level). The
-  // official fix: provide a real require via createRequire.
-  banner: {
-    js: "import { createRequire as __dshNotifyCreateRequire } from 'node:module';\nconst require = __dshNotifyCreateRequire(import.meta.url);",
-  },
+  // Keep deps external, exactly like every stock DSH plugin (dshmarket etc.):
+  // inlining the CommonJS lark SDK into an ESM bundle breaks CJS globals
+  // (require, __dirname) at load time. External deps resolve from the
+  // installed package's node_modules at runtime.
+  external: ['@deepseek-ai/cordis', '@larksuiteoapi/node-sdk', 'qrcode'],
   minify: false,
   sourcemap: false,
   logLevel: 'info',
