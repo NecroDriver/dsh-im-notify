@@ -171,6 +171,50 @@ const { PLUGIN_VERSION } = await import('../plugin-src/host/index.mjs');
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 check('PLUGIN_VERSION matches package.json version', PLUGIN_VERSION === pkg.version,
   `PLUGIN_VERSION=${PLUGIN_VERSION} pkg=${pkg.version}`);
+
+// --- webServer exact-route leg (cold-start path, dshmarket-proven mount) ---
+// Simulates a host where the webServer service is ready and connection.fetch
+// is absent: the RPC must still be reachable through the node-style handler.
+{
+  const { installSettingsRpc } = await import('../plugin-src/host/settings-rpc.mjs');
+  const registered = [];
+  const wsCtx = {
+    webServer: { register(route) { registered.push(route); return () => {}; } },
+    effect: (fn) => { fn(); return () => {}; },
+  };
+  const ctxWs = {
+    inject: (deps, cb) => { if (deps.includes('webServer')) cb(wsCtx); return () => {}; },
+  };
+  const stop = installSettingsRpc(ctxWs, async (method) => ({ ok: true, value: { pong: method } }), { log: () => {} });
+  check('webServer leg: exact route registered at /api/dsh-im-notify',
+    registered.length === 1 && registered[0].kind === 'exact' && registered[0].path === '/api/dsh-im-notify');
+
+  const makeReq = (headers, body) => ({
+    method: 'POST',
+    headers,
+    async *[Symbol.asyncIterator]() { yield Buffer.from(body); },
+  });
+  const makeRes = () => {
+    const out = { status: 0, body: '' };
+    return {
+      out,
+      writeHead(status, hdrs) { out.status = status; out.headers = hdrs; },
+      end(payload) { out.body = String(payload ?? ''); },
+    };
+  };
+  const envelope = JSON.stringify({ type: 'client-request', rpcId: 'wsr1', method: 'dsh-im-notify', payload: { method: 'ping', payload: {} } });
+  const res1 = makeRes();
+  await registered[0].handler(makeReq({ host: '127.0.0.1:8948', 'content-type': 'application/json' }, envelope), res1);
+  const parsed = JSON.parse(res1.out.body);
+  check('webServer leg: 200 + server-response envelope + handler value',
+    res1.out.status === 200 && parsed.type === 'server-response' && parsed.rpcId === 'wsr1' && parsed.result?.value?.pong === 'ping',
+    `status=${res1.out.status}`);
+
+  const res2 = makeRes();
+  await registered[0].handler(makeReq({ host: 'evil.example.com', 'content-type': 'application/json' }, envelope), res2);
+  check('webServer leg: non-loopback host → 403', res2.out.status === 403);
+  stop();
+}
 const storeHome = await mkdtemp(join(tmpdir(), 'dsh-notify-state-'));
 const store = new StateStore(storeHome, () => {});
 await store.load({});

@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.11';
+export const PLUGIN_VERSION = '0.2.12';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -75,7 +75,7 @@ export async function apply(ctx, config = {}) {
       await state.save();
       // Reconnect immediately with the fresh credentials (no Host restart needed).
       if (typeof attemptStart === 'function') {
-        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        if (retryTimer) clearRetry();
         void attemptStart();
       }
     },
@@ -130,7 +130,7 @@ export async function apply(ctx, config = {}) {
         if (typeof attemptStart !== 'function') {
           return { ok: false, error: { code: 'bad-request', message: '尚未配置，没有可重试的连接。' } };
         }
-        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        if (retryTimer) clearRetry();
         void attemptStart();
         return { ok: true, value: await settingsStatus() };
       case 'watch.remove':
@@ -365,6 +365,33 @@ export async function apply(ctx, config = {}) {
   // Feishu WS handshake failing must NEVER blow up the whole plugin (it used to
   // throw → apply rejected → settings RPC unregistered → panel 404). Degrade
   // instead: keep engine + settings alive, retry with backoff, panel shows state.
+  //
+  // Fiber caveat (proven 2026-11-17): fire-and-forget async work that is still
+  // pending when apply() resolves loses its macro-task timers — the 20s
+  // handshake timeout never fired and the dial hung in `connecting` forever.
+  // So the FIRST dial is awaited on the apply chain (fiber alive), and retries
+  // are scheduled through the host `timer` service whose callbacks run in the
+  // host context, not on this plugin's fiber.
+  const hostTimer = (() => { try { return ctx.get?.('timer'); } catch { return undefined; } })();
+  const scheduleRetry = (delay) => {
+    if (retryTimer) { clearRetry(); }
+    try {
+      if (typeof hostTimer?.timeout === 'function') {
+        log(`[dsh-im-notify] retry scheduled in ${delay}ms (host timer service)`);
+        retryTimer = hostTimer.timeout(() => { retryTimer = null; void attemptStart(); }, delay);
+        return;
+      }
+    } catch { /* fall through to global timer */ }
+    log(`[dsh-im-notify] retry scheduled in ${delay}ms (global timer)`);
+    retryTimer = setTimeout(() => { retryTimer = null; void attemptStart(); }, delay);
+  };
+  const clearRetry = () => {
+    try {
+      if (retryTimer && typeof retryTimer === 'object' && typeof retryTimer.dispose === 'function') retryTimer.dispose();
+      else clearTimeout(retryTimer);
+    } catch { /* best effort */ }
+    retryTimer = null;
+  };
   attemptStart = async () => {
     if (signal.aborted) { log('[dsh-im-notify] attemptStart skipped: aborted'); return; }
     log(`[dsh-im-notify] attemptStart: configured=${state.configured} appId=${state.config.appId ? 'present' : 'missing'}`);
@@ -385,14 +412,16 @@ export async function apply(ctx, config = {}) {
       connection.state = 'failed';
       connection.error = error?.message ?? String(error);
       log(`[dsh-im-notify] feishu start failed (attempt ${connection.attempts}): ${connection.error}`, 'error');
-      const delay = Math.min(60_000, 5_000 * 2 ** (connection.attempts - 1));
-      retryTimer = setTimeout(() => { retryTimer = null; void attemptStart(); }, delay);
+      scheduleRetry(Math.min(60_000, 5_000 * 2 ** (connection.attempts - 1)));
     }
   };
-  void attemptStart();
+  // First dial on the apply chain (bounded by the 20s handshake timeout inside
+  // FeishuRuntime.start); after it settles — online or failed — apply resolves
+  // and any retry loop continues off-fiber via the host timer service.
+  await attemptStart();
 
   const dispose = () => {
-    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (retryTimer) clearRetry();
     abort.abort(new DOMException('dsh-im-notify disposed', 'AbortError'));
     registration.cancel();
     stopSettingsRpc();
