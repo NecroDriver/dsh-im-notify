@@ -9,7 +9,8 @@
 // Commands (chat): /help /watch /watchlist /unwatch /sessions /status
 // State: <dshHome>/integrations/dsh-im-notify/{config,state}.json
 
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
+import { appendFileSync } from 'node:fs';
 import { StateStore, stateDirectory } from './state.mjs';
 import { createGateway } from './gateway.mjs';
 import { WatchEngine } from './watch-engine.mjs';
@@ -24,6 +25,9 @@ export const name = 'dsh-im-notify';
 // 'typertGateway' → session.follow / session.prompt / workspace.follow
 export const inject = ['connection', 'typertGateway'];
 
+// Keep in sync with package.json version — logged to debug.log for deployment forensics.
+const PLUGIN_VERSION = '0.2.7-debug';
+
 const HELP = [
   'dsh-im-notify · 任务完成通知',
   '/watch <会话ID或序号> — 关注会话，完成后推送',
@@ -36,6 +40,7 @@ const HELP = [
 ].join('\n');
 
 export async function apply(ctx, config = {}) {
+  let debugFile = null;
   const log = (message, level = 'info') => {
     const target = ctx?.logger ?? console;
     try {
@@ -43,9 +48,14 @@ export async function apply(ctx, config = {}) {
     } catch {
       console.log(message);
     }
+    if (debugFile) {
+      try { appendFileSync(debugFile, `${new Date().toISOString()} [${level}] ${message}\n`); } catch { /* best effort */ }
+    }
   };
 
   const dir = stateDirectory(config);
+  try { debugFile = join(dir, 'debug.log'); } catch { debugFile = null; }
+  log(`[dsh-im-notify] host module loaded (version ${PLUGIN_VERSION})`);
   const state = new StateStore(dir, log);
   await state.load(config);
 

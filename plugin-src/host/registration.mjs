@@ -90,6 +90,7 @@ export function createRegistrationManager({
   }
 
   async function begin() {
+    log(`[registration] begin called (previous attempt superseded)`);
     // supersede any previous attempt
     cancel(String(attempt));
     attempt += 1;
@@ -126,6 +127,7 @@ export function createRegistrationManager({
     // Fire-and-forget: the panel polls status() instead of awaiting this.
     void (async () => {
       try {
+        log('[registration] calling Lark.registerApp…');
         const result = await callRegisterApp({
           ...(config.domain === 'lark' ? { domain: 'accounts.larksuite.com' } : {}),
           source: 'dsh-im-notify',
@@ -136,6 +138,7 @@ export function createRegistrationManager({
           onQRCodeReady: (qr) => {
             // SDK 1.45+ passes { url, expireIn }; accept the legacy bare-string form too.
             const url = typeof qr === 'string' ? qr : qr?.url;
+            log(`[registration] onQRCodeReady payload=${typeof qr}${qr && typeof qr === 'object' ? ` keys={${Object.keys(qr).join(',')}}` : ''} url.length=${url ? String(url).length : 'n/a'}`);
             if (current !== entry || typeof url !== 'string' || url === '') return;
             entry.qrCodeUrl = url;
             const expireIn = typeof qr?.expireIn === 'number' && qr.expireIn > 0 ? qr.expireIn : null;
@@ -144,6 +147,7 @@ export function createRegistrationManager({
           },
           onStatusChange: (change) => {
             const status = typeof change === 'string' ? change : change?.status;
+            log(`[registration] onStatusChange status=${status}`);
             if (current !== entry) return;
             if (status === 'domain_switched') entry.domainSwitched = true;
             if (status === 'polling' && entry.state === 'starting' && entry.qrCodeUrl) entry.state = 'qr_ready';
@@ -181,14 +185,17 @@ export function createRegistrationManager({
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
     const snap = snapshot();
+    const dataUrl = snap.qrCodeUrl ? await cachedQr(snap.qrCodeUrl) : undefined;
+    log(`[registration] begin returning state=${snap.state} qrUrl=${snap.qrCodeUrl ? 'yes' : 'no'} dataUrl=${dataUrl ? dataUrl.length + 'ch' : 'none'} waitedMs=${Date.now() - entry.startedAt}`);
     return {
       ...snap,
-      ...(snap.qrCodeUrl ? { qrCodeDataUrl: await cachedQr(snap.qrCodeUrl) } : {}),
+      ...(dataUrl ? { qrCodeDataUrl: dataUrl } : {}),
     };
   }
 
   async function poll(attemptId) {
     if (!current || String(current.id) !== String(attemptId)) {
+      log(`[registration] poll STALE attemptId=${attemptId} current=${current ? current.id : 'null'}`);
       return { ok: false, error: { code: 'stale-attempt', message: '该扫码会话已结束，请重新发起。' } };
     }
     const snap = snapshot();

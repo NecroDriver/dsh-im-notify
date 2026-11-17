@@ -77,7 +77,9 @@ export function installSettingsRpc(ctx, handler, { log = () => {} } = {}) {
         return reply(rpcId, { ok: false, error: { code: 'bad-request', message: 'Invalid settings request.' } });
       }
       try {
+        log(`[settings-rpc] ${call.method} invoked`);
         const result = await handler(call.method, call.payload, request.signal);
+        log(`[settings-rpc] ${call.method} → ${result?.ok ? 'ok' : `error:${result?.error?.code}`}`);
         return reply(rpcId, result ?? { ok: true, value: null });
       } catch (error) {
         log(`[dsh-im-notify] settings rpc ${call.method} failed: ${error?.message ?? error}`, 'warn');
