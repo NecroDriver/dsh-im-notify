@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.18';
+export const PLUGIN_VERSION = '0.2.19';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -260,6 +260,7 @@ export function apply(ctx, config = {}) {
       return;
     }
     if (!state.isOwner(inbound.senderOpenId)) {
+      log(`rejected non-owner: sender=${inbound.senderOpenId} configuredOwners=${(state.config.ownerOpenIds ?? []).join(',') || '(none)'}`, 'warn');
       await feishu.replyText(inbound.messageId, '⛔ 该机器人仅限管理员使用。');
       return;
     }
