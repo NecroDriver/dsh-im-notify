@@ -38,6 +38,7 @@ export class StateStore {
   #configFile;
   #stateFile;
   #saveTimer = null;
+  #persistedConfig = null;
   #persisted = '';
   log = () => {};
 
@@ -164,19 +165,29 @@ export class StateStore {
     };
   }
 
-  /** Debounced atomic save (tmp + rename). Never throws. */
+  /** Debounced atomic save (tmp + rename): state.json AND config.json (credentials). Never throws. */
   save() {
     if (this.#saveTimer) clearTimeout(this.#saveTimer);
     this.#saveTimer = setTimeout(() => {
       this.#saveTimer = null;
       const json = JSON.stringify(this.#snapshot());
-      if (json === this.#persisted) return;
-      this.#persisted = json;
-      const tmp = `${this.#stateFile}.tmp`;
-      Promise.resolve()
-        .then(() => writeFile(tmp, json, 'utf8'))
-        .then(() => rename(tmp, this.#stateFile))
-        .catch((error) => this.log(`[dsh-im-notify] state save failed: ${error?.message ?? error}`, 'warn'));
+      if (json !== this.#persisted) {
+        this.#persisted = json;
+        const tmp = `${this.#stateFile}.tmp`;
+        Promise.resolve()
+          .then(() => writeFile(tmp, json, 'utf8'))
+          .then(() => rename(tmp, this.#stateFile))
+          .catch((error) => this.log(`[dsh-im-notify] state save failed: ${error?.message ?? error}`, 'warn'));
+      }
+      const cfgJson = JSON.stringify(this.config, null, 2);
+      if (cfgJson !== this.#persistedConfig) {
+        this.#persistedConfig = cfgJson;
+        const ctmp = `${this.#configFile}.tmp`;
+        Promise.resolve()
+          .then(() => writeFile(ctmp, cfgJson, 'utf8'))
+          .then(() => rename(ctmp, this.#configFile))
+          .catch((error) => this.log(`[dsh-im-notify] config save failed: ${error?.message ?? error}`, 'warn'));
+      }
     }, 400);
   }
 }

@@ -104,8 +104,12 @@ export async function apply(ctx, config = {}) {
         const value = await registration.begin(payload ?? {});
         return { ok: true, value };
       }
-      case 'registration.poll':
-        return registration.poll(payload?.attemptId);
+      case 'registration.poll': {
+        const polled = await registration.poll(payload?.attemptId);
+        if (polled?.ok === false) return polled; // {ok:false,error} passes through untouched
+        const { ok: _ignored, ...value } = polled ?? {};
+        return { ok: true, value };
+      }
       case 'registration.cancel':
         registration.cancel(payload?.attemptId);
         return { ok: true, value: { cancelled: true } };

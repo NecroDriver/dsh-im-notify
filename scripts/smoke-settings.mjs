@@ -2,7 +2,7 @@
 // Drives the bundled host entry apply() through the unconfigured (idle) path
 // with a stub ctx, then exercises the /api/dsh-im-notify fetch handler:
 // envelope validation, status, watch add/remove/clear, unknown method.
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -142,6 +142,22 @@ check('saveCredentials received app id + openId',
 manager.cancel(begun.attemptId);
 const stale = await manager.poll(begun.attemptId);
 check('poll after cancel: stale-attempt', stale.ok === false && stale.error?.code === 'stale-attempt');
+
+// --- StateStore regression: save() must persist credentials to config.json ---
+// Incident 2026-11-17: QR scan succeeded, log said "credentials saved", but
+// config.json never hit disk (save() only wrote state.json) → lost on restart.
+const { StateStore } = await import('../plugin-src/host/state.mjs');
+const storeHome = await mkdtemp(join(tmpdir(), 'dsh-notify-state-'));
+const store = new StateStore(storeHome, () => {});
+await store.load({});
+store.config = { ...store.config, appId: 'cli_smoke123', appSecret: 'sec_smoke' };
+store.save();
+await new Promise((resolve) => setTimeout(resolve, 600));
+let cfgOnDisk = null;
+try { cfgOnDisk = JSON.parse(await readFile(join(storeHome, 'config.json'), 'utf8')); } catch { /* missing = fail below */ }
+check('StateStore.save persists config.json credentials',
+  cfgOnDisk?.appId === 'cli_smoke123' && cfgOnDisk?.appSecret === 'sec_smoke',
+  `appId=${cfgOnDisk?.appId ?? 'missing'}`);
 
 const failed = results.filter((item) => !item.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
