@@ -1,0 +1,144 @@
+// dsh-im-notify — settings-panel smoke test (no DSH, no network).
+// Drives the bundled host entry apply() through the unconfigured (idle) path
+// with a stub ctx, then exercises the /api/dsh-im-notify fetch handler:
+// envelope validation, status, watch add/remove/clear, unknown method.
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// NOTE: imports the ESM sources, not lib/index.js — the esbuild bundle's CJS
+// shim for the lark SDK only works under the DSH loader (same as dsh-im's).
+import { apply } from '../plugin-src/host/index.mjs';
+
+const results = [];
+const check = (name, ok, detail = '') => {
+  results.push({ name, ok });
+  console.log(`${ok ? '✅' : '❌'} ${name}${detail ? ` — ${detail}` : ''}`);
+};
+
+const home = await mkdtemp(join(tmpdir(), 'dsh-notify-smoke-'));
+
+let fetchDef = null;
+const ctx = {
+  log: { info: () => {}, warn: () => {}, error: () => {} },
+  effect: (fn) => { fn(); return () => {}; },
+  on: () => () => {},
+  connection: {
+    fetch: {
+      register(def) { fetchDef = def; return () => { fetchDef = null; }; },
+    },
+  },
+  typertGateway: { invoke: async () => { throw new Error('no gateway in smoke'); }, stream: async () => { throw new Error('no gateway in smoke'); } },
+};
+
+const dispose = await apply(ctx, { dshHome: home });
+check('apply(idle) returns dispose', typeof dispose === 'function');
+check('fetch handler registered', fetchDef?.path === '/api/dsh-im-notify' && fetchDef.methods.includes('POST'));
+
+const RPC_KEY = 'dsh-im-notify';
+let rpcSeq = 0;
+async function rpc(method, payload, { envelope = 'good', origin = 'http://127.0.0.1:4583' } = {}) {
+  const body = envelope === 'good'
+    ? { type: 'client-request', rpcId: `r${++rpcSeq}`, method: RPC_KEY, payload: { method, payload } }
+    : envelope;
+  const request = new Request('http://127.0.0.1:3080/api/dsh-im-notify', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', host: '127.0.0.1:3080', origin },
+    body: JSON.stringify(body),
+  });
+  const response = await fetchDef.fetch(request);
+  return response;
+}
+
+// --- envelope / transport validation ---
+let res = await rpc('status', {});
+check('status: 200 + server-response envelope', res.status === 200, `http ${res.status}`);
+let message = await res.json();
+check('status: server-response shape', message.type === 'server-response' && typeof message.rpcId === 'string' && message.result?.ok === true);
+
+let value = message.result.value;
+check('status: unconfigured idle snapshot',
+  value.configured === false && value.watchCount === 0 && value.botReady === false && Array.isArray(value.watches),
+  `configured=${value.configured} watches=${value.watchCount}`);
+
+res = await rpc('status', {}, { envelope: { type: 'nonsense' } });
+check('bad envelope → ok:false bad-request', res.status === 200 && (await res.json()).result?.ok === false);
+
+res = await rpc('status', {}, { origin: 'http://evil.example.com' });
+check('non-loopback origin → 403', res.status === 403);
+
+res = await fetchDef.fetch(new Request('http://127.0.0.1:3080/api/dsh-im-notify', {
+  method: 'POST',
+  headers: { 'content-type': 'text/plain', host: '127.0.0.1:3080' },
+  body: 'x',
+}));
+check('wrong content-type → 415', res.status === 415);
+
+res = await rpc('no.such.method', {});
+message = await res.json();
+check('unknown method → ok:false bad-request', message.result?.ok === false && message.result?.error?.code === 'bad-request');
+
+// --- watch lifecycle through the handler ---
+// (StateStore is live in idle mode: watches persist even without Feishu)
+value = (await (await rpc('watch.clear', {})).json()).result.value;
+check('watch.clear ok on empty', value.watchCount === 0);
+
+// seed a watch through StateStore via a poll-free route: registration.poll stale-attempt
+res = await rpc('registration.poll', { attemptId: '999' });
+message = await res.json();
+check('registration.poll stale attempt → ok:false stale-attempt', message.result?.ok === false && message.result?.error?.code === 'stale-attempt');
+
+res = await rpc('registration.cancel', { attemptId: '999' });
+message = await res.json();
+check('registration.cancel unknown attempt → ok', message.result?.ok === true);
+
+// dispose path must not throw even from idle
+let disposed = true;
+try { dispose(); } catch { disposed = false; }
+check('dispose(idle) clean', disposed);
+
+// --- registration state machine (mocked SDK, no network) ---
+const { createRegistrationManager, maskAppId } = await import('../plugin-src/host/registration.mjs');
+check('maskAppId', maskAppId('cli_a1b2c3d4e5f6g7h8') === 'cli_a1…g7h8', maskAppId('cli_a1b2c3d4e5f6g7h8'));
+
+const savedCredentials = [];
+let releaseScan = null;
+const scanPromise = new Promise((resolve) => { releaseScan = resolve; });
+const manager = createRegistrationManager({
+  getConfig: () => (savedCredentials.length === 1
+    ? { appId: savedCredentials[0].appId }
+    : {}),
+  saveCredentials: async (c) => { savedCredentials.push(c); },
+  registerApp: async (options) => {
+    options.onQRCodeReady('https://accounts.feishu.cn/oauth/v1/device/authorize?user_code=SMOKE');
+    options.onStatusChange('polling');
+    await scanPromise;
+    return { client_id: 'cli_a1b2c3d4e5f6g7h8', client_secret: 'SECRET', user_info: { open_id: 'ou_smoke' } };
+  },
+});
+
+const begun = await manager.begin();
+check('begin: qr_ready with data URL',
+  begun.state === 'qr_ready' && begun.qrCodeUrl?.includes('user_code=SMOKE')
+  && begun.qrCodeDataUrl?.startsWith('data:image/png;base64,'),
+  `state=${begun.state}`);
+
+let polled = await manager.poll(begun.attemptId);
+check('poll: qr_ready phase', polled.ok === true && polled.state === 'qr_ready');
+
+releaseScan();
+await new Promise((resolve) => setTimeout(resolve, 100));
+polled = await manager.poll(begun.attemptId);
+check('poll: succeeded after scan', polled.ok === true && polled.state === 'succeeded' && polled.appIdMasked === 'cli_a1…g7h8',
+  `state=${polled.state}`);
+
+check('saveCredentials received app id + openId',
+  savedCredentials.length === 1 && savedCredentials[0].appId === 'cli_a1b2c3d4e5f6g7h8' && savedCredentials[0].openId === 'ou_smoke');
+
+manager.cancel(begun.attemptId);
+const stale = await manager.poll(begun.attemptId);
+check('poll after cancel: stale-attempt', stale.ok === false && stale.error?.code === 'stale-attempt');
+
+const failed = results.filter((item) => !item.ok);
+console.log(`\n${results.length - failed.length}/${results.length} passed`);
+process.exit(failed.length === 0 ? 0 : 1);

@@ -10,12 +10,21 @@
 - `/sessions` — 列出最近 15 个会话
 - `/watchlist` / `/unwatch` — 管理关注
 - `/status` — 插件状态
+- **GUI 设置面板**：DSH 设置 → 「IM 通知」— 未接入时扫码一键接入；已接入时查看连接状态、管理全部关注（含 Web 侧移除/清空）
 - **引用回程**：引用任意推送卡片直接回复 → 空闲会话用 `queue`（恢复其 Agent 继续），运行中会话用 `steer`（注入为补充指令），并回执确认
 - 重启补偿：插件/Host 重启后，按 seq 游标补发漏掉的完成事件（最多最近 3 条）
 
-## 前置：飞书应用接入（两种方式）
+## 前置：飞书应用接入（三种方式）
 
-### 方式 A：扫码一键接入（推荐，约 1 分钟）
+### 方式 A：GUI 扫码接入（推荐，约 1 分钟）
+
+1. DSH Web GUI → **设置 → IM 通知** → 「扫码接入飞书」
+2. 手机飞书扫页面上的二维码，在落地页点一次"创建/授权"
+3. 显示 ✅ 接入完成 → **重启 DeepSeek Harness** 生效
+
+扫码者自动成为 owner；权限（读私聊/@消息、发消息）与事件订阅（`im.message.receive_v1`）在落地页一次勾齐，**无需访问开发者后台**。原理：官方 SDK `lark.registerApp()` 设备授权流（RFC 8628），与 dsh-im 设置页的扫码接入同一机制。
+
+### 方式 B：终端扫码接入
 
 ```bash
 # 源码仓库里（开发/clone 用户）：
@@ -27,17 +36,13 @@ node <DSH配置目录>/node_modules/dsh-im-notify/scripts/setup.mjs
 # Windows 示例：node C:\Users\<你>\.dsh\profiles\<profile>\node_modules\dsh-im-notify\scripts\setup.mjs
 ```
 
-终端渲染二维码 → 手机飞书扫码 → 落地页点一次"创建/授权" → 凭据自动写入
-`<dshHome>/integrations/dsh-im-notify/config.json`，扫码者自动成为 owner。
-权限（读私聊/@消息、发消息）与事件订阅（`im.message.receive_v1`）在落地页一次勾齐，
-**无需访问开发者后台**。原理：官方 SDK `lark.registerApp()` 设备授权流（RFC 8628），
-与 dsh-im 设置页的扫码接入同一机制。
+凭据自动写入 `<dshHome>/integrations/dsh-im-notify/config.json`，与方式 A 完全等价。
 
 - 国际版账号：`npm run setup -- --domain lark`（feishu 域扫到国际账号也会自动切换）
 - 为已有应用补权限：`npm run setup -- --app-id cli_xxx`（落地页展示权限 diff）
 - 离线自检：`npm run setup -- --check`
 - 覆盖已有凭据：`npm run setup -- --force`
-- 企业禁用个人创建应用时 → 用方式 B
+- 企业禁用个人创建应用时 → 用方式 C
 
 ### 方式 B：手动创建（兜底）
 

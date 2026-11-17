@@ -15,6 +15,8 @@ import { createGateway } from './gateway.mjs';
 import { WatchEngine } from './watch-engine.mjs';
 import { FeishuRuntime, buildCompletionCard, stripMentions } from './feishu.mjs';
 import { RouteBack } from './route-back.mjs';
+import { createRegistrationManager, maskAppId } from './registration.mjs';
+import { installSettingsRpc } from './settings-rpc.mjs';
 
 export const name = 'dsh-im-notify';
 
@@ -47,17 +49,81 @@ export async function apply(ctx, config = {}) {
   const state = new StateStore(dir, log);
   await state.load(config);
 
-  if (!state.configured) {
-    log(`[dsh-im-notify] no credentials found at ${dir}/config.json (appId/appSecret) — plugin stays idle`, 'warn');
-    return;
+  let gateway = null;
+  let engine = null;
+  let feishu = null;
+
+  // ---- settings-panel RPC (alive even while unconfigured: QR onboarding) ----
+  const registration = createRegistrationManager({
+    getConfig: () => state.config,
+    saveCredentials: async ({ appId, appSecret, openId, domain }) => {
+      const owners = Array.isArray(state.config.ownerOpenIds) && state.config.ownerOpenIds.length > 0
+        ? state.config.ownerOpenIds
+        : (openId ? [openId] : []);
+      state.config = { ...state.config, appId, appSecret, domain, ownerOpenIds: owners };
+      await state.save();
+    },
+    log,
+  });
+
+  async function settingsStatus() {
+    return {
+      configured: state.configured,
+      appIdMasked: state.configured ? maskAppId(state.config.appId) : null,
+      domain: state.config.domain ?? 'feishu',
+      watchCount: state.watches.length,
+      mappingCount: Object.keys(state.mappings).length,
+      botReady: feishu?.status?.ready === true,
+      botStartedAt: feishu?.status?.startedAt ?? null,
+      registration: registration.snapshot(),
+      watches: state.watches.map((watch) => ({
+        sessionId: watch.sessionId,
+        title: watch.title,
+        chatId: watch.chatId,
+        addedAt: watch.watchStartedAt,
+        running: engine?.isRunning(watch.sessionId) === true,
+      })),
+    };
   }
 
-  const gateway = createGateway(ctx, log);
+  const stopSettingsRpc = installSettingsRpc(ctx, async (method, payload) => {
+    switch (method) {
+      case 'status':
+        return { ok: true, value: await settingsStatus() };
+      case 'registration.begin': {
+        const value = await registration.begin(payload ?? {});
+        return { ok: true, value };
+      }
+      case 'registration.poll':
+        return registration.poll(payload?.attemptId);
+      case 'registration.cancel':
+        registration.cancel(payload?.attemptId);
+        return { ok: true, value: { cancelled: true } };
+      case 'watch.remove':
+        state.removeWatch(String(payload?.chatId ?? ''), String(payload?.sessionId ?? ''));
+        return { ok: true, value: await settingsStatus() };
+      case 'watch.clear':
+        for (const watch of [...state.watches]) state.removeWatch(watch.chatId, watch.sessionId);
+        return { ok: true, value: await settingsStatus() };
+      default:
+        return { ok: false, error: { code: 'bad-request', message: `Unknown method: ${method}` } };
+    }
+  }, { log });
+
+  if (!state.configured) {
+    log(`[dsh-im-notify] no credentials found at ${dir}/config.json — idle, settings panel offers QR onboarding`, 'warn');
+    return () => {
+      registration.cancel();
+      stopSettingsRpc();
+    };
+  }
+
+  gateway = createGateway(ctx, log);
   const abort = new AbortController();
   const { signal } = abort;
 
   // completion push → card + mapping
-  const feishu = new FeishuRuntime({
+  feishu = new FeishuRuntime({
     config: state.config,
     log,
     onEvent: (inbound) => void handleInbound(inbound),
@@ -66,7 +132,7 @@ export async function apply(ctx, config = {}) {
     },
   });
 
-  const engine = new WatchEngine({
+  engine = new WatchEngine({
     state,
     gateway,
     deliver: async ({ sessionId, title, chatId, replyToMessageId, kind, startedAt, note }) => {
@@ -271,6 +337,8 @@ export async function apply(ctx, config = {}) {
 
   const dispose = () => {
     abort.abort(new DOMException('dsh-im-notify disposed', 'AbortError'));
+    registration.cancel();
+    stopSettingsRpc();
     engine.stop();
     feishu.stop();
   };

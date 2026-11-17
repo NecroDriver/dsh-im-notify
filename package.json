@@ -25,9 +25,10 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node plugin-src/host/build.mjs",
+    "build": "node plugin-src/host/build.mjs && node plugin-src/client/build.mjs",
     "setup": "node scripts/setup.mjs",
-    "dev:link": "node scripts/dev-link.mjs"
+    "dev:link": "node scripts/dev-link.mjs",
+    "smoke:settings": "node scripts/smoke-settings.mjs"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.45.0",
