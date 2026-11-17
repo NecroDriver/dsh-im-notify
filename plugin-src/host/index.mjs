@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.20';
+export const PLUGIN_VERSION = '0.2.21';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -192,6 +192,32 @@ export function apply(ctx, config = {}) {
   // ---- session listing (verified surface only: workspace.follow + session.follow) ----
   const lastListings = new Map(); // chatId → { at, items: [{sessionId,title,workspace}] }
 
+  const extractText = (content) => {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content.map((part) => (typeof part === 'string' ? part : part?.text ?? '')).join('').trim();
+    }
+    if (content && typeof content.text === 'string') return content.text;
+    return '';
+  };
+
+  // GUI list titles ("功能 | …") are client-side summaries; session headers are
+  // often untitled. Fall back to the newest user message as the display label.
+  const pickSessionLabel = (records) => {
+    if (!Array.isArray(records)) return null;
+    for (let i = records.length - 1; i >= 0; i--) {
+      const record = records[i] ?? {};
+      const event = record.event ?? record;
+      const kind = event.type ?? record.type;
+      const data = event.data ?? record.data ?? {};
+      const isUser = kind === 'user' || data.role === 'user' || record.role === 'user';
+      if (!isUser) continue;
+      const text = extractText(data.content ?? data.text ?? record.content).replace(/\s+/g, ' ').trim();
+      if (text) return text.length > 36 ? `${text.slice(0, 36)}…` : text;
+    }
+    return null;
+  };
+
   async function listSessions(limit = 15) {
     const baseline = await gateway.workspaceBaseline(signal);
     const workspaces = Array.isArray(baseline?.items) ? baseline.items : [];
@@ -206,14 +232,20 @@ export function apply(ctx, config = {}) {
     for (const entry of tail) {
       let title = null;
       try {
-        const snapshot = await gateway.sessionSnapshot(entry.sessionId, 1, signal);
-        title = typeof snapshot.header?.title === 'string' && snapshot.header.title
-          ? snapshot.header.title : null;
+        const snapshot = await gateway.sessionSnapshot(entry.sessionId, 6, signal);
+        title = (typeof snapshot.header?.title === 'string' && snapshot.header.title)
+          || pickSessionLabel(snapshot.records)
+          || null;
+        if (!items.length) {
+          log(`session snapshot sample: header=${JSON.stringify(snapshot.header)?.slice(0, 200)} record0=${JSON.stringify(snapshot.records?.[0])?.slice(0, 300)}`);
+        }
       } catch { /* keep null title */ }
       items.push({ ...entry, title });
     }
     return items;
   }
+
+  const shortId = (sessionId) => String(sessionId).replace(/^session-/, '').slice(0, 8);
 
   async function resolveWatchTarget(chatId, arg) {
     const trimmed = arg.trim();
@@ -281,7 +313,7 @@ export function apply(ctx, config = {}) {
             return;
           }
           const lines = items.map((item, index) =>
-            `${index + 1}. ${item.title ?? '（无标题）'} · ${item.workspace} · ${item.sessionId.slice(0, 8)}…`);
+            `${index + 1}. ${item.title ?? '（无内容）'} · ${item.workspace} · id:${shortId(item.sessionId)}`);
           await feishu.replyText(inbound.messageId,
             ['最近会话（/watch 序号 即可关注）：', ...lines].join('\n'));
           return;
