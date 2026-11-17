@@ -18,8 +18,13 @@
 ### 方式 A：扫码一键接入（推荐，约 1 分钟）
 
 ```bash
+# 源码仓库里（开发/clone 用户）：
 npm install        # 首次需安装依赖（含 qrcode）
 npm run setup
+
+# 或：已通过 DSH 插件管理器安装（无需 clone）：
+node <DSH配置目录>/node_modules/dsh-im-notify/scripts/setup.mjs
+# Windows 示例：node C:\Users\<你>\.dsh\profiles\<profile>\node_modules\dsh-im-notify\scripts\setup.mjs
 ```
 
 终端渲染二维码 → 手机飞书扫码 → 落地页点一次"创建/授权" → 凭据自动写入

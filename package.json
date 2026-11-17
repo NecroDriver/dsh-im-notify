@@ -30,11 +30,11 @@
     "dev:link": "node scripts/dev-link.mjs"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.45.0"
+    "@larksuiteoapi/node-sdk": "^1.45.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "esbuild": "^0.25.9",
-    "qrcode": "^1.5.4"
+    "esbuild": "^0.25.9"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
