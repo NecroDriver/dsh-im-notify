@@ -1,6 +1,6 @@
 {
   "name": "dsh-im-notify",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Feishu-only task-completion notifier for DeepSeek Harness: watch any session, get a push when its turn ends, quote-reply the push to route your message straight back into that session.",
   "author": "dsh-im-notify contributors",
   "license": "MIT",

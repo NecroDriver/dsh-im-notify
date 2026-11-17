@@ -133,12 +133,17 @@ export function createRegistrationManager({
           appPreset: APP_PRESET,
           addons: ADDONS,
           signal: controller.signal,
-          onQRCodeReady: (url) => {
-            if (current !== entry || typeof url !== 'string') return;
+          onQRCodeReady: (qr) => {
+            // SDK 1.45+ passes { url, expireIn }; accept the legacy bare-string form too.
+            const url = typeof qr === 'string' ? qr : qr?.url;
+            if (current !== entry || typeof url !== 'string' || url === '') return;
             entry.qrCodeUrl = url;
+            const expireIn = typeof qr?.expireIn === 'number' && qr.expireIn > 0 ? qr.expireIn : null;
+            if (expireIn) entry.expiresAt = Date.now() + expireIn * 1000;
             if (entry.state === 'starting') entry.state = 'qr_ready';
           },
-          onStatusChange: (status) => {
+          onStatusChange: (change) => {
+            const status = typeof change === 'string' ? change : change?.status;
             if (current !== entry) return;
             if (status === 'domain_switched') entry.domainSwitched = true;
             if (status === 'polling' && entry.state === 'starting' && entry.qrCodeUrl) entry.state = 'qr_ready';

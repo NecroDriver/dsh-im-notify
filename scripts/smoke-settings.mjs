@@ -110,8 +110,8 @@ const manager = createRegistrationManager({
     : {}),
   saveCredentials: async (c) => { savedCredentials.push(c); },
   registerApp: async (options) => {
-    options.onQRCodeReady('https://accounts.feishu.cn/oauth/v1/device/authorize?user_code=SMOKE');
-    options.onStatusChange('polling');
+    options.onQRCodeReady({ url: 'https://accounts.feishu.cn/oauth/v1/device/authorize?user_code=SMOKE', expireIn: 600 });
+    options.onStatusChange({ status: 'polling' });
     await scanPromise;
     return { client_id: 'cli_a1b2c3d4e5f6g7h8', client_secret: 'SECRET', user_info: { open_id: 'ou_smoke' } };
   },
