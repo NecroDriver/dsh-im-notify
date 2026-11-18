@@ -12,6 +12,15 @@
 //    same rule dsh-codex-ui uses to hide them from session lists).
 // An explicit /watch still wins: deliberate is deliberate.
 const EXCLUDED_SESSION_PREFIXES = ['mnemon-', 'dsh-automation-session-', 'im:'];
+
+// Harness-injected context lines are user-role records but never what the
+// human actually typed — skip them when picking display labels.
+const SYSTEM_TEXT_PREFIXES = [
+  'Time sampled', 'Elapsed since', 'Browser time zone',
+  'MNEMON ', 'MNEMON\t', '[MNEMON]', '<system-reminder', 'MNEMON VIEW TOOLS',
+];
+export const isSystemText = (text) => typeof text === 'string'
+  && SYSTEM_TEXT_PREFIXES.some((prefix) => text.startsWith(prefix));
 const isExcludedSession = (session, sessionId) => {
   if (typeof sessionId === 'string') {
     if (EXCLUDED_SESSION_PREFIXES.some((prefix) => sessionId.startsWith(prefix))) return true;
@@ -130,7 +139,7 @@ export class WatchEngine {
         if (spoken) {
           if (event.type === 'assistant/message') {
             this.#rememberSpoken(sessionId, 'answer', spoken);
-          } else {
+          } else if (!isSystemText(spoken)) {
             this.#rememberSpoken(sessionId, 'label', spoken.replace(/\s+/g, ' ').slice(0, 60));
           }
         }

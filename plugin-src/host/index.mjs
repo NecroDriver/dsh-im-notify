@@ -13,7 +13,7 @@ import { basename, join } from 'node:path';
 import { appendFileSync } from 'node:fs';
 import { StateStore, stateDirectory } from './state.mjs';
 import { createGateway } from './gateway.mjs';
-import { WatchEngine } from './watch-engine.mjs';
+import { WatchEngine, isSystemText } from './watch-engine.mjs';
 import { FeishuRuntime, buildCompletionCard, stripMentions } from './feishu.mjs';
 import { RouteBack } from './route-back.mjs';
 import { createRegistrationManager, maskAppId } from './registration.mjs';
@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.30';
+export const PLUGIN_VERSION = '0.2.31';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -223,7 +223,8 @@ export function apply(ctx, config = {}) {
   };
 
   // GUI list titles ("功能 | …") are client-side summaries; session headers are
-  // often untitled. Fall back to the newest user message as the display label.
+  // often untitled. Fall back to the newest REAL user message (skipping
+  // harness-injected lines like "Time sampled …") as the display label.
   // Live record shape: {type:'user/message', data:{turn,step,message:{role,content:[blocks]}}}.
   const pickSessionLabel = (records) => {
     if (!Array.isArray(records)) return null;
@@ -238,7 +239,8 @@ export function apply(ctx, config = {}) {
       if (!isUser) continue;
       const text = extractSpokenText(message.content ?? data.content ?? data.text ?? record.content)
         .replace(/\s+/g, ' ').trim();
-      if (text) return text.length > 36 ? `${text.slice(0, 36)}…` : text;
+      if (!text || isSystemText(text)) continue;
+      return text.length > 36 ? `${text.slice(0, 36)}…` : text;
     }
     return null;
   };
@@ -266,6 +268,17 @@ export function apply(ctx, config = {}) {
     return null;
   };
 
+  const relTime = (value) => {
+    const ms = Date.now() - value;
+    if (!Number.isFinite(ms) || ms < 0) return '';
+    const minutes = Math.round(ms / 60000);
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes}分钟前`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours}小时前`;
+    return `${Math.round(hours / 24)}天前`;
+  };
+
   async function listSessions(limit = 15) {
     const baseline = await gateway.workspaceBaseline(signal);
     const workspaces = Array.isArray(baseline?.items) ? baseline.items : [];
@@ -275,21 +288,23 @@ export function apply(ctx, config = {}) {
         flat.push({ sessionId, workspace: basename(String(workspace?.path ?? workspace?.workspaceId ?? '')) });
       }
     }
-    const tail = flat.slice(-limit).reverse();
+    const tail = flat.slice(-limit);
     const items = [];
     for (const entry of tail) {
       let title = null;
+      let createdAt = null;
       try {
         const snapshot = await gateway.sessionSnapshot(entry.sessionId, 6, signal);
         title = (typeof snapshot.header?.title === 'string' && snapshot.header.title)
           || pickSessionLabel(snapshot.records)
           || null;
-        if (!items.length) {
-          log(`session snapshot sample: header=${JSON.stringify(snapshot.header)?.slice(0, 200)} record0=${JSON.stringify(snapshot.records?.[0])?.slice(0, 300)}`);
-        }
+        const created = Date.parse(snapshot.header?.createdAt ?? '');
+        if (Number.isFinite(created)) createdAt = created;
       } catch { /* keep null title */ }
-      items.push({ ...entry, title });
+      items.push({ ...entry, title, createdAt });
     }
+    // Newest first, like the GUI sidebar.
+    items.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
     return items;
   }
 
@@ -361,7 +376,7 @@ export function apply(ctx, config = {}) {
             return;
           }
           const lines = items.map((item, index) =>
-            `${index + 1}. ${item.title ?? '（无内容）'} · ${item.workspace} · id:${shortId(item.sessionId)}`);
+            `${index + 1}. ${item.title ?? '（无内容）'} · ${item.workspace}${item.createdAt ? ` · ${relTime(item.createdAt)}` : ''} · id:${shortId(item.sessionId)}`);
           await feishu.replyText(inbound.messageId,
             ['最近会话（/watch 序号 即可关注）：', ...lines].join('\n'));
           return;
