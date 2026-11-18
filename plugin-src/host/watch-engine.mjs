@@ -6,11 +6,20 @@
 // card for every watched session's `turn/end` event. seq cursors dedupe pushes
 // and drive the restart compensation pass (session.follow snapshot scan).
 
-// Internal sessions spawned by other plugins (e.g. dsh-mnemon's memory-write
-// agents) carry no user-facing meaning — never include them in catch-all
-// (/watchall) pushes. An explicit /watch still wins: deliberate is deliberate.
-const INTERNAL_SESSION_PREFIXES = ['mnemon-run-v1-'];
-const isInternalSession = (sessionId) => INTERNAL_SESSION_PREFIXES.some((prefix) => sessionId.startsWith(prefix));
+// Non-user sessions never enter catch-all (/watchall) pushes:
+//  - plugin-internal sessions (mnemon memory agents, automation, IM channels)
+//  - subagent sessions (origin === 'subagent' or a parentSession reference —
+//    same rule dsh-codex-ui uses to hide them from session lists).
+// An explicit /watch still wins: deliberate is deliberate.
+const EXCLUDED_SESSION_PREFIXES = ['mnemon-run-v1-', 'dsh-automation-session-', 'im:'];
+const isExcludedSession = (session, sessionId) => {
+  if (typeof sessionId === 'string') {
+    if (EXCLUDED_SESSION_PREFIXES.some((prefix) => sessionId.startsWith(prefix))) return true;
+  }
+  if (session?.origin === 'subagent') return true;
+  const parent = session?.header?.parentSession ?? session?.parentSession;
+  return parent !== undefined && parent !== null && parent !== '';
+};
 
 export class WatchEngine {
   #state;
@@ -25,6 +34,7 @@ export class WatchEngine {
   // stream. turn/end reads it directly: no snapshot round-trip, no races.
   #spoken = new Map();
   #started = false;
+  #shapeLogged = false;
 
   /**
    * @param {{
@@ -96,9 +106,16 @@ export class WatchEngine {
     // session's final answer is available the moment its turn ends. Records:
     // {type:'assistant/message'|'user/message', data:{message:{content:[blocks]}}};
     // only {type:'text'} blocks are spoken — tool-call/reasoning are skipped.
-    // Internal sessions skip harvest too: their text is never pushed anywhere.
-    if (isInternalSession(sessionId)) return;
-    if (event.type === 'assistant/message' || event.type === 'user/message') {
+    // Excluded sessions (subagents, plugin internals) skip harvest AND catch-all
+    // push; an explicit /watch on them still delivers.
+    const excluded = isExcludedSession(session, sessionId);
+    if (event.type === 'turn/end' && !this.#shapeLogged) {
+      this.#shapeLogged = true;
+      try {
+        this.#log(`turn/end session shape — keys=[${Object.keys(session ?? {}).join(',')}] origin=${JSON.stringify(session?.origin)} parentSession=${JSON.stringify(session?.header?.parentSession ?? session?.parentSession)} excluded=${excluded}`, 'info');
+      } catch { /* diagnostic only */ }
+    }
+    if (!excluded && (event.type === 'assistant/message' || event.type === 'user/message')) {
       const blocks = event.data?.message?.content;
       if (Array.isArray(blocks)) {
         const spoken = blocks
@@ -117,9 +134,9 @@ export class WatchEngine {
     }
 
     const watches = this.#state.watchesFor(sessionId);
-    // Explicit watches always win; only sessions with none fall through to the
-    // catch-all (/watchall) target.
-    const catchAll = watches.length === 0 ? this.#state.watchAll : null;
+    // Explicit watches always win; only main-agent sessions with none fall
+    // through to the catch-all (/watchall) target.
+    const catchAll = watches.length === 0 && !excluded ? this.#state.watchAll : null;
     if (watches.length === 0 && !catchAll) return;
     const targets = watches.length > 0
       ? watches.map((watch) => ({ chatId: watch.chatId, replyToMessageId: watch.replyToMessageId, title: watch.title ?? null }))
