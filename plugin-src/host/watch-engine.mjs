@@ -11,14 +11,17 @@
 //  - subagent sessions (origin === 'subagent' or a parentSession reference —
 //    same rule dsh-codex-ui uses to hide them from session lists).
 // An explicit /watch still wins: deliberate is deliberate.
-const EXCLUDED_SESSION_PREFIXES = ['mnemon-run-v1-', 'dsh-automation-session-', 'im:'];
+const EXCLUDED_SESSION_PREFIXES = ['mnemon-', 'dsh-automation-session-', 'im:'];
 const isExcludedSession = (session, sessionId) => {
   if (typeof sessionId === 'string') {
     if (EXCLUDED_SESSION_PREFIXES.some((prefix) => sessionId.startsWith(prefix))) return true;
   }
   if (session?.origin === 'subagent') return true;
-  const parent = session?.header?.parentSession ?? session?.parentSession;
-  return parent !== undefined && parent !== null && parent !== '';
+  const header = session?.header;
+  const parent = header?.parentSession ?? session?.parentSession;
+  if (parent !== undefined && parent !== null && parent !== '') return true;
+  const depth = header?.delegationDepth;
+  return typeof depth === 'number' && depth > 0;
 };
 
 export class WatchEngine {
@@ -112,7 +115,8 @@ export class WatchEngine {
     if (event.type === 'turn/end' && !this.#shapeLogged) {
       this.#shapeLogged = true;
       try {
-        this.#log(`turn/end session shape — keys=[${Object.keys(session ?? {}).join(',')}] origin=${JSON.stringify(session?.origin)} parentSession=${JSON.stringify(session?.header?.parentSession ?? session?.parentSession)} excluded=${excluded}`, 'info');
+        const header = session?.header ?? {};
+        this.#log(`turn/end header shape — keys=[${Object.keys(header).join(',')}] origin=${JSON.stringify(header.origin)} parentSession=${JSON.stringify(header.parentSession)} delegationDepth=${JSON.stringify(header.delegationDepth)} excluded=${excluded}`, 'info');
       } catch { /* diagnostic only */ }
     }
     if (!excluded && (event.type === 'assistant/message' || event.type === 'user/message')) {
