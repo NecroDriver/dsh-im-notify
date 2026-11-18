@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.25';
+export const PLUGIN_VERSION = '0.2.26';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -195,7 +195,7 @@ export function apply(ctx, config = {}) {
             || pickSessionLabel(snap.records)
             || null;
         }
-        summary = pickLastAssistantSummary(snap.records, 600);
+        summary = pickLastAssistantSummary(snap.records, 0);
       } catch { /* keep nulls — card falls back gracefully */ }
       if (!summary) {
         const shape = (debugSnap?.records ?? []).slice(0, 12).map((record) => {
@@ -253,7 +253,8 @@ export function apply(ctx, config = {}) {
   // Live record shape: {type:'assistant/message', data:{turn,step,message:{role,content:[blocks]}}};
   // intermediate steps only carry tool-call/reasoning blocks and are skipped by
   // extractSpokenText, so the newest match IS the final answer.
-  const pickLastAssistantSummary = (records, maxChars = 600) => {
+  // maxChars = 0 → no truncation (whitespace/markdown preserved for the card).
+  const pickLastAssistantSummary = (records, maxChars = 0) => {
     if (!Array.isArray(records)) return null;
     for (let i = records.length - 1; i >= 0; i--) {
       const record = records[i] ?? {};
@@ -264,10 +265,9 @@ export function apply(ctx, config = {}) {
       const isAssistant = kind === 'assistant/message' || kind === 'assistant'
         || message.role === 'assistant' || data.role === 'assistant' || record.role === 'assistant';
       if (!isAssistant) continue;
-      const text = extractSpokenText(message.content ?? data.content ?? data.text ?? record.content)
-        .replace(/\s+/g, ' ').trim();
+      const text = extractSpokenText(message.content ?? data.content ?? data.text ?? record.content).trim();
       if (!text) continue;
-      return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+      return maxChars > 0 && text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
     }
     return null;
   };
