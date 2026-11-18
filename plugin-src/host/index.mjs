@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.22';
+export const PLUGIN_VERSION = '0.2.23';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -182,17 +182,20 @@ export function apply(ctx, config = {}) {
     state,
     gateway,
     deliver: async ({ sessionId, title, chatId, replyToMessageId, kind, startedAt, note }) => {
-      // watchAll pushes carry no stored title — resolve one lazily per push.
+      // Resolve display title + last-answer summary from the live session log
+      // on every push, so the card carries enough context to plan next steps.
       let cardTitle = title;
-      if (!cardTitle) {
-        try {
-          const snap = await gateway.sessionSnapshot(sessionId, 6, signal);
+      let summary = null;
+      try {
+        const snap = await gateway.sessionSnapshot(sessionId, 12, signal);
+        if (!cardTitle) {
           cardTitle = (typeof snap.header?.title === 'string' && snap.header.title)
             || pickSessionLabel(snap.records)
             || null;
-        } catch { /* keep null — card falls back to 未命名会话 */ }
-      }
-      const card = buildCompletionCard({ title: cardTitle, sessionId, kind, startedAt, note });
+        }
+        summary = pickLastAssistantSummary(snap.records, 600);
+      } catch { /* keep nulls — card falls back gracefully */ }
+      const card = buildCompletionCard({ title: cardTitle, summary, sessionId, kind, startedAt, note });
       const messageId = await feishu.sendCompletionCard({ chatId, replyToMessageId, card });
       if (messageId) state.addMapping(messageId, sessionId, cardTitle);
     },
@@ -226,6 +229,25 @@ export function apply(ctx, config = {}) {
       if (!isUser) continue;
       const text = extractText(data.content ?? data.text ?? record.content).replace(/\s+/g, ' ').trim();
       if (text) return text.length > 36 ? `${text.slice(0, 36)}…` : text;
+    }
+    return null;
+  };
+
+  // Newest assistant text in the snapshot = the turn's final answer. Shown as
+  // the card summary so the user can decide next steps without opening the GUI.
+  const pickLastAssistantSummary = (records, maxChars = 600) => {
+    if (!Array.isArray(records)) return null;
+    for (let i = records.length - 1; i >= 0; i--) {
+      const record = records[i] ?? {};
+      const event = record.event ?? record;
+      const kind = event.type ?? record.type;
+      const data = event.data ?? record.data ?? {};
+      const isAssistant = kind === 'assistant'
+        || data.role === 'assistant' || record.role === 'assistant';
+      if (!isAssistant) continue;
+      const text = extractText(data.content ?? data.text ?? record.content).replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
     }
     return null;
   };

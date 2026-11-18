@@ -228,6 +228,16 @@ check('StateStore.save persists config.json credentials',
   cfgOnDisk?.appId === 'cli_smoke123' && cfgOnDisk?.appSecret === 'sec_smoke',
   `appId=${cfgOnDisk?.appId ?? 'missing'}`);
 
+// --- completion card summary (v0.2.23) ---
+const { buildCompletionCard } = await import('../plugin-src/host/feishu.mjs');
+const plainCard = buildCompletionCard({ title: 't', sessionId: 'session-1', kind: 'completed', startedAt: Date.now() - 1000 });
+check('card: no summary → no 摘要 block',
+  !JSON.stringify(plainCard).includes('结果摘要'));
+const summaryCard = buildCompletionCard({ title: 't', sessionId: 'session-1', kind: 'completed', startedAt: Date.now() - 1000, summary: '已修复登录页并跑通测试' });
+const summaryJson = JSON.stringify(summaryCard);
+check('card: summary renders in lark_md element',
+  summaryJson.includes('结果摘要') && summaryJson.includes('已修复登录页并跑通测试'));
+
 const failed = results.filter((item) => !item.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
 process.exit(failed.length === 0 ? 0 : 1);

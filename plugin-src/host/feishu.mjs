@@ -33,30 +33,38 @@ function formatElapsed(startedAt) {
   return ` · 耗时 ${Math.floor(minutes / 60)}h${minutes % 60}m`;
 }
 
-export function buildCompletionCard({ title, sessionId, kind, startedAt, note }) {
+export function buildCompletionCard({ title, sessionId, kind, startedAt, note, summary }) {
   const { emoji, template, label } = statusEmojiAndTemplate(kind);
   const md = [
     `**${title ?? '未命名会话'}**`,
     `\`${sessionId}\``,
     `${emoji} ${label}${formatElapsed(startedAt)}${note ? `　${note}` : ''}`,
   ].join('\n');
+  const elements = [
+    { tag: 'div', text: { tag: 'lark_md', content: md } },
+  ];
+  if (summary) {
+    elements.push({ tag: 'hr' });
+    elements.push({
+      tag: 'div',
+      text: { tag: 'lark_md', content: `**📋 结果摘要**\n${summary}` },
+    });
+  }
+  elements.push({ tag: 'hr' });
+  elements.push({
+    tag: 'note',
+    elements: [{
+      tag: 'plain_text',
+      content: '引用回复这条消息，内容将直达对应会话',
+    }],
+  });
   return {
     config: { wide_screen_mode: true },
     header: {
       title: { tag: 'plain_text', content: `${emoji} ${label}` },
       template,
     },
-    elements: [
-      { tag: 'div', text: { tag: 'lark_md', content: md } },
-      { tag: 'hr' },
-      {
-        tag: 'note',
-        elements: [{
-          tag: 'plain_text',
-          content: '引用回复这条消息，内容将直达对应会话',
-        }],
-      },
-    ],
+    elements,
   };
 }
 
