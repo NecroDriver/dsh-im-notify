@@ -56,6 +56,10 @@ export class StateStore {
     this.mappings = {};
     /** @type {{chatId:string,replyToMessageId:string|null,startedAt:string}|null} catch-all target */
     this.watchAll = null;
+    /** @type {Record<string,{sessionId:string,title:string|null,boundAt:string}>} chatId → bound session */
+    this.activeSessions = {};
+    /** @type {Record<string,{workspaceId:string,path:string}>} chatId → chosen default workspace */
+    this.workspaceChoices = {};
   }
 
   async load(cordisConfig = {}) {
@@ -78,6 +82,10 @@ export class StateStore {
     this.mappings = state.mappings && typeof state.mappings === 'object' ? state.mappings : {};
     this.watchAll = state.watchAll && typeof state.watchAll === 'object' && typeof state.watchAll.chatId === 'string'
       ? state.watchAll : null;
+    this.activeSessions = state.activeSessions && typeof state.activeSessions === 'object'
+      ? state.activeSessions : {};
+    this.workspaceChoices = state.workspaceChoices && typeof state.workspaceChoices === 'object'
+      ? state.workspaceChoices : {};
     this.#persisted = JSON.stringify(this.#snapshot());
     this.#gcMappings();
     return this;
@@ -101,6 +109,28 @@ export class StateStore {
   setWatchAll(entry) {
     this.watchAll = entry; // {chatId, replyToMessageId, startedAt} | null
     this.save();
+  }
+
+  /** Bind a chat to a session: plain text messages are prompted there. */
+  setActiveSession(chatId, entry) {
+    if (entry === null) delete this.activeSessions[chatId];
+    else this.activeSessions[chatId] = entry; // {sessionId, title, boundAt}
+    this.save();
+  }
+
+  getActiveSession(chatId) {
+    return this.activeSessions[chatId] ?? null;
+  }
+
+  /** Default workspace for /new, per chat. */
+  setWorkspaceChoice(chatId, entry) {
+    if (entry === null) delete this.workspaceChoices[chatId];
+    else this.workspaceChoices[chatId] = entry; // {workspaceId, path}
+    this.save();
+  }
+
+  getWorkspaceChoice(chatId) {
+    return this.workspaceChoices[chatId] ?? null;
   }
 
   watchesFor(sessionId) {
@@ -175,6 +205,8 @@ export class StateStore {
       watches: this.watches,
       mappings: this.mappings,
       watchAll: this.watchAll,
+      activeSessions: this.activeSessions,
+      workspaceChoices: this.workspaceChoices,
       savedAt: new Date().toISOString(),
     };
   }

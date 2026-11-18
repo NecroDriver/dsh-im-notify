@@ -108,5 +108,24 @@ export function createGateway(ctx, log) {
         },
       }, signal);
     },
+
+    /**
+     * Create a session in a workspace. Shape from dsh-im createSession()
+     * (src/channels/shared/harness-client.mjs): session.create {workspaceId}
+     * → {sessionId}. agentPreset is deliberately omitted so the Host resolves
+     * its current default preset.
+     */
+    async createSession(workspaceId, signal) {
+      const created = await invoke('session', 'create', { workspaceId }, signal);
+      if (typeof created?.sessionId !== 'string' || !created.sessionId) {
+        throw new Error('session.create returned no sessionId');
+      }
+      return created.sessionId;
+    },
+
+    /** session.rename {sessionId, title} (dsh-im renameSession). */
+    async renameSession(sessionId, title, signal) {
+      return invoke('session', 'rename', { sessionId, title }, signal);
+    },
   };
 }

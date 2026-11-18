@@ -27,18 +27,28 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.31';
+export const PLUGIN_VERSION = '0.3.0';
 
 const HELP = [
-  'dsh-im-notify · 任务完成通知',
+  'dsh-im-notify · 任务完成通知 + 轻量遥控',
+  '',
+  '【通知】',
   '/watch <会话ID或序号> — 关注会话，完成后推送',
   '/watchall — 所有未关注会话完成后都推送到本聊天（/watchall off 关闭）',
   '/watchlist — 查看本聊天关注的会话',
   '/unwatch <会话ID或序号> — 取消关注',
-  '/sessions — 列出最近会话（配合 /watch 序号）',
+  '/sessions — 列出最近会话（配合 /watch、/use 序号）',
+  '',
+  '【会话遥控】',
+  '/workspaces — 列出工作区',
+  '/ws <序号> — 选择 /new 的默认工作区',
+  '/new [标题] — 在所选工作区创建新会话并绑定本聊天',
+  '/use <会话ID或序号> — 把本聊天绑定到已有会话',
+  '/unbind — 解除绑定',
   '/status — 插件状态',
   '',
-  '推送来之后：引用那条推送消息直接回复，内容会直达对应会话。',
+  '绑定后：直接发文字 = 发送到该会话（运行中=追加指令，空闲=新任务）。',
+  '推送来之后：引用那条推送消息直接回复，内容直达对应会话。',
 ].join('\n');
 
 // Synchronous on purpose (production-proven by dshmarket lib/index.js:241):
@@ -209,6 +219,7 @@ export function apply(ctx, config = {}) {
 
   // ---- session listing (verified surface only: workspace.follow + session.follow) ----
   const lastListings = new Map(); // chatId → { at, items: [{sessionId,title,workspace}] }
+  const lastWorkspaces = new Map(); // chatId → { at, items: [{workspaceId,path,count}] }
 
   // Spoken text only: content blocks carry {type:'text'} answers alongside
   // {type:'tool-call'}/{type:'reasoning'} siblings — the latter must be skipped.
@@ -345,12 +356,27 @@ export function apply(ctx, config = {}) {
 
     const text = stripMentions(inbound.text);
     if (!text.startsWith('/')) {
+      // Bound chat → plain text is a prompt to the active session.
+      const active = state.getActiveSession(inbound.chatId);
+      if (active && state.isOwner(inbound.senderOpenId)) {
+        try {
+          const running = engine.isRunning(active.sessionId);
+          await gateway.prompt(active.sessionId, text, { mode: running ? 'steer' : 'queue', signal });
+          await feishu.replyText(inbound.messageId,
+            running ? `✅ 已注入运行中的会话 ${shortId(active.sessionId)}` : `✅ 已发送给会话 ${shortId(active.sessionId)}`);
+        } catch (error) {
+          log(`prompt to active session failed: ${error?.message ?? error}`, 'warn');
+          await feishu.replyText(inbound.messageId,
+            `⚠️ 发送失败：${error?.message ?? error}\n会话可能已不可用，/unbind 解绑或 /use 换一个。`);
+        }
+        return;
+      }
       // Not a command and not a routed quote: occasional hint, never chatty.
       const last = hintCooldown.get(inbound.chatId) ?? 0;
       if (Date.now() - last > 6 * 60 * 60 * 1000 && text) {
         hintCooldown.set(inbound.chatId, Date.now());
         await feishu.replyText(inbound.messageId,
-          '本机器人只做任务完成通知。发送 /help 查看用法；引用推送消息可直接向对应会话下达指令。');
+          '本机器人只做任务完成通知与会话遥控。发送 /help 查看用法；/new 可新建会话，/use 可绑定已有会话。');
       }
       return;
     }
@@ -471,7 +497,109 @@ export function apply(ctx, config = {}) {
             `连接：${status.ready ? '✅ 飞书长连接正常' : `⚠️ ${status.lastError ?? '未连接'}`}`,
             `启动：${status.startedAt ?? '-'} · 收消息 ${status.messagesReceived} · 发卡片 ${status.cardsSent}`,
             `关注：${state.watches.length} 个 · 全量推送：${state.watchAll ? '✅ 开' : '关'} · 回程映射：${Object.keys(state.mappings).length} 条`,
+            (() => {
+              const active = state.getActiveSession(inbound.chatId);
+              const ws = state.getWorkspaceChoice(inbound.chatId);
+              return `当前聊天绑定：${active ? `${active.title ?? shortId(active.sessionId)} (${shortId(active.sessionId)})` : '未绑定（/new 新建、/use 绑定已有）'}`
+                + `${ws ? ` · 默认工作区：${basename(ws.path)}` : ''}`;
+            })(),
           ].join('\n'));
+          return;
+        }
+
+        case '/workspaces': {
+          const baseline = await gateway.workspaceBaseline(signal);
+          const items = (Array.isArray(baseline?.items) ? baseline.items : [])
+            .map((item) => ({
+              workspaceId: String(item?.workspaceId ?? ''),
+              path: String(item?.path ?? ''),
+              count: Array.isArray(item?.sessionIds) ? item.sessionIds.length : 0,
+            }))
+            .filter((item) => item.workspaceId);
+          if (items.length === 0) {
+            await feishu.replyText(inbound.messageId, '没有找到工作区。');
+            return;
+          }
+          const chosen = state.getWorkspaceChoice(inbound.chatId);
+          lastWorkspaces.set(inbound.chatId, { at: Date.now(), items });
+          const lines = items.map((item, index) =>
+            `${index + 1}. ${basename(item.path) || item.path} · ${item.count} 个会话${chosen?.workspaceId === item.workspaceId ? ' · ✅ 当前默认' : ''}`);
+          await feishu.replyText(inbound.messageId,
+            ['工作区（/ws 序号 选择 /new 的默认工作区）：', ...lines].join('\n'));
+          return;
+        }
+
+        case '/ws': {
+          const listing = lastWorkspaces.get(inbound.chatId);
+          if (!listing || Date.now() - listing.at > 10 * 60 * 1000) {
+            await feishu.replyText(inbound.messageId, '请先执行 /workspaces 再用序号选择。');
+            return;
+          }
+          if (!/^\d+$/.test(arg.trim())) {
+            await feishu.replyText(inbound.messageId, '用法：/ws <序号>（来自 /workspaces 列表）');
+            return;
+          }
+          const item = listing.items[Number(arg.trim()) - 1];
+          if (!item) {
+            await feishu.replyText(inbound.messageId, '序号超出范围。');
+            return;
+          }
+          state.setWorkspaceChoice(inbound.chatId, { workspaceId: item.workspaceId, path: item.path });
+          await feishu.replyText(inbound.messageId,
+            `✅ 默认工作区已设为 ${basename(item.path) || item.path}。/new [标题] 将在这里创建会话。`);
+          return;
+        }
+
+        case '/new': {
+          const choice = state.getWorkspaceChoice(inbound.chatId);
+          if (!choice) {
+            await feishu.replyText(inbound.messageId, '请先 /workspaces 查看列表，再 /ws <序号> 选择默认工作区。');
+            return;
+          }
+          const sessionId = await gateway.createSession(choice.workspaceId, signal);
+          const title = arg.trim() || null;
+          if (title) {
+            try { await gateway.renameSession(sessionId, title, signal); } catch { /* title is cosmetic */ }
+          }
+          state.setActiveSession(inbound.chatId, {
+            sessionId,
+            title,
+            boundAt: new Date().toISOString(),
+          });
+          await feishu.replyText(inbound.messageId,
+            `✅ 已在 ${basename(choice.path)} 创建会话并绑定本聊天（id:${shortId(sessionId)}${title ? ` · ${title}` : ''}）。\n现在直接发文字即可开始任务；/unbind 解除绑定。`);
+          return;
+        }
+
+        case '/use': {
+          if (!arg) {
+            await feishu.replyText(inbound.messageId, '用法：/use <会话ID前缀 或 /sessions 序号>');
+            return;
+          }
+          const target = await resolveWatchTarget(inbound.chatId, arg);
+          if (target.error) {
+            await feishu.replyText(inbound.messageId, target.error);
+            return;
+          }
+          state.setActiveSession(inbound.chatId, {
+            sessionId: target.sessionId,
+            title: target.title ?? null,
+            boundAt: new Date().toISOString(),
+          });
+          await feishu.replyText(inbound.messageId,
+            `✅ 本聊天已绑定会话 ${target.title ?? shortId(target.sessionId)} (${shortId(target.sessionId)})。\n直接发文字即可对话；/unbind 解除绑定。`);
+          return;
+        }
+
+        case '/unbind': {
+          const active = state.getActiveSession(inbound.chatId);
+          if (!active) {
+            await feishu.replyText(inbound.messageId, '本聊天当前没有绑定会话。');
+            return;
+          }
+          state.setActiveSession(inbound.chatId, null);
+          await feishu.replyText(inbound.messageId,
+            `已解除绑定（原会话 ${shortId(active.sessionId)} 不受影响）。/new 新建、/use 换绑。`);
           return;
         }
 

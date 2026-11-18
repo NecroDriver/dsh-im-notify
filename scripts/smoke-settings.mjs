@@ -238,6 +238,59 @@ const summaryJson = JSON.stringify(summaryCard);
 check('card: summary renders in lark_md element',
   summaryJson.includes('结果摘要') && summaryJson.includes('已修复登录页并跑通测试'));
 
+// --- v0.3.0: gateway.createSession/renameSession RPC shapes (dsh-im createSession) ---
+{
+  const { createGateway } = await import('../plugin-src/host/gateway.mjs');
+  const invokes = [];
+  const gwCtx = {
+    typertGateway: {
+      invoke: async (request) => {
+        invokes.push(request);
+        if (request.method === 'create') return { sessionId: 'session-created-1' };
+        return {};
+      },
+      stream: async () => { throw new Error('unused'); },
+    },
+    connection: { createPeer: () => ({ id: 'p' }) },
+  };
+  const gw = createGateway(gwCtx, () => {});
+  invokes.length = 0;
+  await gw.createSession('ws_default');
+  check('createSession: session.create {workspaceId}, no agentPreset',
+    invokes.length === 1 && invokes[0].namespace === 'session' && invokes[0].method === 'create'
+      && invokes[0].args.workspaceId === 'ws_default' && invokes[0].args.agentPreset === undefined);
+  invokes.length = 0;
+  await gw.renameSession('session-abc', '飞书新建');
+  check('renameSession: session.rename {sessionId,title}',
+    invokes.length === 1 && invokes[0].method === 'rename' && invokes[0].args.sessionId === 'session-abc' && invokes[0].args.title === '飞书新建');
+  invokes.length = 0;
+  let threwEmpty = false;
+  try {
+    const gwBad = createGateway({
+      typertGateway: { invoke: async () => ({}), stream: async () => {} },
+      connection: { createPeer: () => ({}) },
+    }, () => {});
+    await gwBad.createSession('ws_y');
+  } catch { threwEmpty = true; }
+  check('createSession: throws when sessionId missing in reply', threwEmpty === true);
+}
+
+// --- v0.3.0: StateStore activeSessions/workspaceChoices persistence ---
+store.setActiveSession('chat_1', { sessionId: 'session-abc', title: '新任务', boundAt: '2026-11-18T00:00:00Z' });
+store.setWorkspaceChoice('chat_1', { workspaceId: 'ws_default', path: 'D:/Workspace/personal' });
+store.setActiveSession('chat_1', null); // unbind then rebind to prove delete semantics
+check('activeSessions: unbind removes entry',
+  store.getActiveSession('chat_1') === null && Object.keys(store.activeSessions).length === 0);
+store.setActiveSession('chat_1', { sessionId: 'session-abc', title: '新任务', boundAt: '2026-11-18T00:00:00Z' });
+store.save();
+await new Promise((resolve) => setTimeout(resolve, 600));
+const reloaded = new StateStore(storeHome, () => {});
+await reloaded.load({});
+check('activeSessions + workspaceChoices survive reload',
+  reloaded.getActiveSession('chat_1')?.sessionId === 'session-abc'
+    && reloaded.getWorkspaceChoice('chat_1')?.workspaceId === 'ws_default',
+  `active=${JSON.stringify(reloaded.getActiveSession('chat_1'))}`);
+
 const failed = results.filter((item) => !item.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
 process.exit(failed.length === 0 ? 0 : 1);
