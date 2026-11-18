@@ -6,6 +6,12 @@
 // card for every watched session's `turn/end` event. seq cursors dedupe pushes
 // and drive the restart compensation pass (session.follow snapshot scan).
 
+// Internal sessions spawned by other plugins (e.g. dsh-mnemon's memory-write
+// agents) carry no user-facing meaning — never include them in catch-all
+// (/watchall) pushes. An explicit /watch still wins: deliberate is deliberate.
+const INTERNAL_SESSION_PREFIXES = ['mnemon-run-v1-'];
+const isInternalSession = (sessionId) => INTERNAL_SESSION_PREFIXES.some((prefix) => sessionId.startsWith(prefix));
+
 export class WatchEngine {
   #state;
   #gateway;
@@ -90,6 +96,8 @@ export class WatchEngine {
     // session's final answer is available the moment its turn ends. Records:
     // {type:'assistant/message'|'user/message', data:{message:{content:[blocks]}}};
     // only {type:'text'} blocks are spoken — tool-call/reasoning are skipped.
+    // Internal sessions skip harvest too: their text is never pushed anywhere.
+    if (isInternalSession(sessionId)) return;
     if (event.type === 'assistant/message' || event.type === 'user/message') {
       const blocks = event.data?.message?.content;
       if (Array.isArray(blocks)) {
