@@ -15,13 +15,16 @@ export class WatchEngine {
   #runningStarts = new Map(); // sessionId → turn/start time (ms)
   /** @type {Set<string>} sessions with a turn in flight */
   #running = new Set();
+  // sessionId → { answer, label } — spoken text harvested live from the event
+  // stream. turn/end reads it directly: no snapshot round-trip, no races.
+  #spoken = new Map();
   #started = false;
 
   /**
    * @param {{
    *   state: import('./state.mjs').StateStore,
    *   gateway: Awaited<ReturnType<import('./gateway.mjs').createGateway>>,
-   *   deliver: (arg: {sessionId:string,title:string|null,chatId:string,replyToMessageId:string|null,kind:string,startedAt:number|null,note?:string}) => Promise<void>,
+   *   deliver: (arg: {sessionId:string,title:string|null,summary:string|null,chatId:string,replyToMessageId:string|null,kind:string,startedAt:number|null,note?:string}) => Promise<void>,
    *   log: (msg:string, level?:string)=>void,
    * }} options
    */
@@ -38,6 +41,24 @@ export class WatchEngine {
 
   isRunning(sessionId) {
     return this.#running.has(sessionId);
+  }
+
+  #rememberSpoken(sessionId, key, value) {
+    let entry = this.#spoken.get(sessionId);
+    if (!entry) {
+      entry = { answer: null, label: null };
+      this.#spoken.set(sessionId, entry);
+      // cheap cap: drop the oldest half when the map grows unbounded
+      if (this.#spoken.size > 400) {
+        const drop = Math.floor(this.#spoken.size / 2);
+        let i = 0;
+        for (const k of this.#spoken.keys()) {
+          if (i++ >= drop) break;
+          this.#spoken.delete(k);
+        }
+      }
+    }
+    entry[key] = value;
   }
 
   start(ctx) {
@@ -58,11 +79,35 @@ export class WatchEngine {
       this.#dispose = null;
     }
     this.#started = false;
+    this.#spoken.clear();
   }
 
   handle(session, event) {
     const sessionId = session?.id;
     if (typeof sessionId !== 'string' || !event || typeof event !== 'object') return;
+
+    // Harvest spoken text from the live stream BEFORE any early return so every
+    // session's final answer is available the moment its turn ends. Records:
+    // {type:'assistant/message'|'user/message', data:{message:{content:[blocks]}}};
+    // only {type:'text'} blocks are spoken — tool-call/reasoning are skipped.
+    if (event.type === 'assistant/message' || event.type === 'user/message') {
+      const blocks = event.data?.message?.content;
+      if (Array.isArray(blocks)) {
+        const spoken = blocks
+          .filter((block) => block && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string')
+          .map((block) => block.text)
+          .join('')
+          .trim();
+        if (spoken) {
+          if (event.type === 'assistant/message') {
+            this.#rememberSpoken(sessionId, 'answer', spoken);
+          } else {
+            this.#rememberSpoken(sessionId, 'label', spoken.replace(/\s+/g, ' ').slice(0, 60));
+          }
+        }
+      }
+    }
+
     const watches = this.#state.watchesFor(sessionId);
     // Explicit watches always win; only sessions with none fall through to the
     // catch-all (/watchall) target.
@@ -96,11 +141,14 @@ export class WatchEngine {
     this.#runningStarts.delete(sessionId);
     this.#running.delete(sessionId);
     const kind = event.data?.reason?.kind ?? 'completed';
+    const spoken = this.#spoken.get(sessionId) ?? {};
     for (const target of targets) {
       void Promise.resolve()
         .then(() => this.#deliver({
           sessionId,
           title: target.title,
+          summary: spoken.answer ?? null,
+          fallbackTitle: spoken.label ?? null,
           chatId: target.chatId,
           replyToMessageId: target.replyToMessageId,
           kind,
