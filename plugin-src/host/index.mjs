@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.24';
+export const PLUGIN_VERSION = '0.2.25';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -216,17 +216,21 @@ export function apply(ctx, config = {}) {
   // ---- session listing (verified surface only: workspace.follow + session.follow) ----
   const lastListings = new Map(); // chatId → { at, items: [{sessionId,title,workspace}] }
 
-  const extractText = (content) => {
-    if (typeof content === 'string') return content;
-    if (Array.isArray(content)) {
-      return content.map((part) => (typeof part === 'string' ? part : part?.text ?? '')).join('').trim();
-    }
-    if (content && typeof content.text === 'string') return content.text;
-    return '';
+  // Spoken text only: content blocks carry {type:'text'} answers alongside
+  // {type:'tool-call'}/{type:'reasoning'} siblings — the latter must be skipped.
+  const extractSpokenText = (blocks) => {
+    if (typeof blocks === 'string') return blocks;
+    if (!Array.isArray(blocks)) return '';
+    return blocks
+      .filter((block) => block && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text)
+      .join('')
+      .trim();
   };
 
   // GUI list titles ("功能 | …") are client-side summaries; session headers are
   // often untitled. Fall back to the newest user message as the display label.
+  // Live record shape: {type:'user/message', data:{turn,step,message:{role,content:[blocks]}}}.
   const pickSessionLabel = (records) => {
     if (!Array.isArray(records)) return null;
     for (let i = records.length - 1; i >= 0; i--) {
@@ -234,16 +238,21 @@ export function apply(ctx, config = {}) {
       const event = record.event ?? record;
       const kind = event.type ?? record.type;
       const data = event.data ?? record.data ?? {};
-      const isUser = kind === 'user' || data.role === 'user' || record.role === 'user';
+      const message = data.message ?? {};
+      const isUser = kind === 'user/message' || kind === 'user'
+        || message.role === 'user' || data.role === 'user' || record.role === 'user';
       if (!isUser) continue;
-      const text = extractText(data.content ?? data.text ?? record.content).replace(/\s+/g, ' ').trim();
+      const text = extractSpokenText(message.content ?? data.content ?? data.text ?? record.content)
+        .replace(/\s+/g, ' ').trim();
       if (text) return text.length > 36 ? `${text.slice(0, 36)}…` : text;
     }
     return null;
   };
 
-  // Newest assistant text in the snapshot = the turn's final answer. Shown as
-  // the card summary so the user can decide next steps without opening the GUI.
+  // Newest assistant spoken text in the snapshot = the turn's final answer.
+  // Live record shape: {type:'assistant/message', data:{turn,step,message:{role,content:[blocks]}}};
+  // intermediate steps only carry tool-call/reasoning blocks and are skipped by
+  // extractSpokenText, so the newest match IS the final answer.
   const pickLastAssistantSummary = (records, maxChars = 600) => {
     if (!Array.isArray(records)) return null;
     for (let i = records.length - 1; i >= 0; i--) {
@@ -251,10 +260,12 @@ export function apply(ctx, config = {}) {
       const event = record.event ?? record;
       const kind = event.type ?? record.type;
       const data = event.data ?? record.data ?? {};
-      const isAssistant = kind === 'assistant'
-        || data.role === 'assistant' || record.role === 'assistant';
+      const message = data.message ?? {};
+      const isAssistant = kind === 'assistant/message' || kind === 'assistant'
+        || message.role === 'assistant' || data.role === 'assistant' || record.role === 'assistant';
       if (!isAssistant) continue;
-      const text = extractText(data.content ?? data.text ?? record.content).replace(/\s+/g, ' ').trim();
+      const text = extractSpokenText(message.content ?? data.content ?? data.text ?? record.content)
+        .replace(/\s+/g, ' ').trim();
       if (!text) continue;
       return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
     }
