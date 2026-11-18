@@ -27,7 +27,7 @@ export const inject = ['connection', 'typertGateway'];
 
 // Keep in sync with package.json version — logged to debug.log for deployment forensics.
 // (smoke-settings.mjs asserts PLUGIN_VERSION === package.json version.)
-export const PLUGIN_VERSION = '0.2.23';
+export const PLUGIN_VERSION = '0.2.24';
 
 const HELP = [
   'dsh-im-notify · 任务完成通知',
@@ -186,8 +186,10 @@ export function apply(ctx, config = {}) {
       // on every push, so the card carries enough context to plan next steps.
       let cardTitle = title;
       let summary = null;
+      let debugSnap = null;
       try {
-        const snap = await gateway.sessionSnapshot(sessionId, 12, signal);
+        const snap = await gateway.sessionSnapshot(sessionId, 40, signal);
+        debugSnap = snap;
         if (!cardTitle) {
           cardTitle = (typeof snap.header?.title === 'string' && snap.header.title)
             || pickSessionLabel(snap.records)
@@ -195,6 +197,13 @@ export function apply(ctx, config = {}) {
         }
         summary = pickLastAssistantSummary(snap.records, 600);
       } catch { /* keep nulls — card falls back gracefully */ }
+      if (!summary) {
+        const shape = (debugSnap?.records ?? []).slice(0, 12).map((record) => {
+          const event = record.event ?? record;
+          return `${event.type ?? record.type ?? '?'}:${String(JSON.stringify(event.data ?? record.data ?? {})).slice(0, 90)}`;
+        }).join(' | ');
+        log(`summary miss — snapshot records=${debugSnap?.records?.length ?? 0} head=[${shape.slice(0, 1200)}]`);
+      }
       const card = buildCompletionCard({ title: cardTitle, summary, sessionId, kind, startedAt, note });
       const messageId = await feishu.sendCompletionCard({ chatId, replyToMessageId, card });
       if (messageId) state.addMapping(messageId, sessionId, cardTitle);
